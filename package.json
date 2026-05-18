@@ -1,0 +1,18 @@
+{
+  "name": "@sclera/sdk",
+  "version": "0.1.0",
+  "description": "Sclera SDK for Node.js - define actions, connect clients, and execute across devices.",
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "dependencies": {
+    "ws": "^8.19.0"
+  },
+  "peerDependencies": {},
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "license": "MIT"
+}
