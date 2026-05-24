@@ -178,9 +178,11 @@ export default class ScleraClient {
    * Use `await` to get results or ignore for fire-and-forget.
    * @param {string} eventId
    * @param {object} payload
+   * @param {string[]} [targetListenerIds]
+   * @param {string[]} [targetUserIds]
    * @returns {Promise<{delivered: number, failed: Array<{listenerClientId: string, reason: string}>}>}
    */
-  emitEvent(eventId, payload) {
+  emitEvent(eventId, payload, targetListenerIds, targetUserIds) {
     const channelKey = this.#emitterChannelKeys.get(eventId);
     if (!channelKey) throw new Error(`Event "${eventId}" not registered. Call registerEvents() first.`);
 
@@ -195,6 +197,8 @@ export default class ScleraClient {
       encryptedPayload: ct,
       iv: iv.toString("base64"),
       authTag,
+      targetListenerIds,
+      targetUserIds,
     });
   }
 

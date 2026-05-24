@@ -18,9 +18,9 @@ export default class Event {
   // Called by registerEvents() to bind the event to a client instance
   _bindClient(client) { this.#client = client; return this; }
 
-  emit(payload) {
+  emit(payload, targetListenerIds = undefined, targetUserIds = undefined) {
     if (!this.#client) throw new Error(`Event "${this.#id}" is not registered. Call registerEvents() first.`);
-    return this.#client.emitEvent(this.#id, payload);
+    return this.#client.emitEvent(this.#id, payload, targetListenerIds, targetUserIds);
   }
 
   export() {

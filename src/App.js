@@ -103,9 +103,13 @@ export default class App {
 
   /**
    * Encrypts and emits a payload via HTTP.
+   * @param {string} eventId
+   * @param {object} payload
+   * @param {string[]} [targetListenerIds]
+   * @param {string[]} [targetUserIds]
    * @returns {Promise<{delivered: number, failed: Array}>}
    */
-  async emitEvent(eventId, payload) {
+  async emitEvent(eventId, payload, targetListenerIds, targetUserIds) {
     const channelKey = this.#emitterChannelKeys.get(eventId);
     if (!channelKey) throw new Error(`Event "${eventId}" not registered. Call registerEvents() first.`);
 
@@ -120,6 +124,8 @@ export default class App {
       encryptedPayload: ct,
       iv: iv.toString("base64"),
       authTag,
+      targetListenerIds,
+      targetUserIds,
     });
     return result;
   }
