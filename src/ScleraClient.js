@@ -19,7 +19,7 @@ export default class ScleraClient {
   #channelKeys = new Map();         // "emitterId:eventId" → Buffer(32) — channel keys as listener
   #eventCallbacks = new Map();      // "emitterId:eventId" → handler function
 
-  constructor({ url = "ws://localhost:3000/ws", configPath } = {}) {
+  constructor({ url = "wss://apisclera.darye.dev/ws", configPath = "client_config.json" } = {}) {
     this.#url = url;
     this.#configPath = configPath;
     if (configPath) this.#loadConfig();

@@ -4,6 +4,7 @@ export default class App {
   #clientId;
   #clientSecret;
   #scleraUrl;
+  #apiBasePath;
   #webhookSigningSecret;
   #actions = new Map();
   #eventHandlers = {};
@@ -18,26 +19,41 @@ export default class App {
    * @param {object} opts
    * @param {string}  opts.clientId
    * @param {string}  opts.clientSecret
-   * @param {string} [opts.scleraUrl]
+   * @param {string} [opts.scleraUrl]  Public origin of the API server (scheme + host [:port], no path), same role as SERVER_PUBLIC_URL in backend `.env`.
+   * @param {string} [opts.apiBasePath]  HTTP API prefix on that host (default /api)
    * @param {string} [opts.webhookSigningSecret]  Plain-text webhook signing secret
    *   (value of SCLERA_WEBHOOK_SIGNING_SECRET). When provided, webhookHandler()
    *   automatically verifies every incoming request signature.
    */
-  constructor({ clientId, clientSecret, scleraUrl = "http://localhost:3000", webhookSigningSecret } = {}) {
+  constructor({
+    clientId,
+    clientSecret,
+    scleraUrl = "https://apisclera.darye.dev",
+    apiBasePath = "",
+    webhookSigningSecret,
+  } = {}) {
     this.#clientId = clientId;
     this.#clientSecret = clientSecret;
-    this.#scleraUrl = scleraUrl;
+    this.#scleraUrl = scleraUrl.replace(/\/+$/, "");
+    const rawApi = apiBasePath ?? "";
+    const trimmed = rawApi.replace(/\/+$/, "");
+    this.#apiBasePath = trimmed === "" ? "" : trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
     this.#webhookSigningSecret = webhookSigningSecret ?? null;
 
     this.#ecdh = crypto.createECDH("prime256v1");
     this.#ecdh.generateKeys();
   }
 
+  #rest(path) {
+    const p = path.startsWith("/") ? path : `/${path}`;
+    return `${this.#scleraUrl}${this.#apiBasePath}${p}`;
+  }
+
   // ── Actions ───────────────────────────────────────────────────────────────
 
   async registerActions(actions) {
     for (const action of actions) this.#actions.set(action.id, action);
-    const response = await fetch(`${this.#scleraUrl}/oauth/apps/${this.#clientId}/actions`, {
+    const response = await fetch(this.#rest(`/oauth/apps/${this.#clientId}/actions`), {
       method: "PUT",
       headers: { Authorization: this.#basicAuth(), "Content-Type": "application/json" },
       body: JSON.stringify(actions.map((a) => a.export())),
@@ -47,7 +63,7 @@ export default class App {
   }
 
   async getActions() {
-    const response = await fetch(`${this.#scleraUrl}/oauth/apps/${this.#clientId}/actions`, {
+    const response = await fetch(this.#rest(`/oauth/apps/${this.#clientId}/actions`), {
       headers: { Authorization: this.#basicAuth() },
     });
     if (!response.ok) throw new Error(`Failed to get actions: ${await response.text()}`);
@@ -56,7 +72,7 @@ export default class App {
 
   async execAction(actionId, parameters, timeout = 10000, { accessToken } = {}) {
     if (!accessToken) throw new Error("execAction requires an accessToken");
-    const response = await fetch(`${this.#scleraUrl}/actions/exec`, {
+    const response = await fetch(this.#rest("/actions/exec"), {
       method: "POST",
       headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
       body: JSON.stringify({ actions: [{ action: actionId, parameters }] }),
@@ -303,7 +319,7 @@ export default class App {
   // ── HTTP helpers ──────────────────────────────────────────────────────────
 
   async #post(path, body) {
-    const response = await fetch(`${this.#scleraUrl}${path}`, {
+    const response = await fetch(this.#rest(path), {
       method: "POST",
       headers: { Authorization: this.#basicAuth(), "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -313,7 +329,7 @@ export default class App {
   }
 
   async #put(path, body) {
-    const response = await fetch(`${this.#scleraUrl}${path}`, {
+    const response = await fetch(this.#rest(path), {
       method: "PUT",
       headers: { Authorization: this.#basicAuth(), "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -323,7 +339,7 @@ export default class App {
   }
 
   async #get(path) {
-    const response = await fetch(`${this.#scleraUrl}${path}`, {
+    const response = await fetch(this.#rest(path), {
       headers: { Authorization: this.#basicAuth() },
     });
     if (!response.ok) throw new Error(await response.text());
