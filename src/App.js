@@ -1,12 +1,15 @@
 import crypto from "crypto";
+import ResourceHost from "./ResourceHost.js";
+import Subdevice from "./Subdevice.js";
 
-export default class App {
+export default class App extends ResourceHost {
   #clientId;
   #clientSecret;
   #scleraUrl;
   #apiBasePath;
   #webhookSigningSecret;
-  #actions = new Map();
+  /** @type {Map<string, Map<string, import('./Action.js').default>>} */
+  #subdeviceActions = new Map();
   #eventHandlers = {};
 
   // Event system state
@@ -24,6 +27,9 @@ export default class App {
    * @param {string} [opts.webhookSigningSecret]  Plain-text webhook signing secret
    *   (value of SCLERA_WEBHOOK_SIGNING_SECRET). When provided, webhookHandler()
    *   automatically verifies every incoming request signature.
+   * @param {import('./Action.js').default[]} [opts.actions]
+   * @param {import('./Event.js').default[]} [opts.events]
+   * @param {import('./Subdevice.js').default[]} [opts.subdevices]
    */
   constructor({
     clientId,
@@ -31,7 +37,11 @@ export default class App {
     scleraUrl = "https://apisclera.darye.dev",
     apiBasePath = "",
     webhookSigningSecret,
+    actions = [],
+    events = [],
+    subdevices = [],
   } = {}) {
+    super({ actions, events, subdevices });
     this.#clientId = clientId;
     this.#clientSecret = clientSecret;
     this.#scleraUrl = scleraUrl.replace(/\/+$/, "");
@@ -51,22 +61,53 @@ export default class App {
 
   // ── Actions ───────────────────────────────────────────────────────────────
 
-  async registerActions(actions) {
-    for (const action of actions) this.#actions.set(action.id, action);
+  async registerActions(actions, { replace = true } = {}) {
+    if (actions) {
+      for (const action of actions) this.addAction(action);
+    }
+    const list = this.getActions();
     const response = await fetch(this.#rest(`/oauth/apps/${this.#clientId}/actions`), {
       method: "PUT",
       headers: { Authorization: this.#basicAuth(), "Content-Type": "application/json" },
-      body: JSON.stringify(actions.map((a) => a.export())),
+      body: JSON.stringify({ actions: list.map((a) => a.export()), replace }),
     });
     if (!response.ok) throw new Error(`Failed to register actions: ${await response.text()}`);
     return response.json();
   }
 
-  async getActions() {
+  /** Actions currently stored on the server for this OAuth app (JSON schema, not Action instances). */
+  async fetchRegisteredActions() {
     const response = await fetch(this.#rest(`/oauth/apps/${this.#clientId}/actions`), {
       headers: { Authorization: this.#basicAuth() },
     });
-    if (!response.ok) throw new Error(`Failed to get actions: ${await response.text()}`);
+    if (!response.ok) throw new Error(`Failed to fetch actions: ${await response.text()}`);
+    return response.json();
+  }
+
+  async registerSubdevices(subdevices, { replace = true, accessToken } = {}) {
+    if (subdevices) {
+      for (const sd of subdevices) this.addSubdevice(sd);
+    }
+    const list = this.getSubdevices();
+    for (const sd of list) {
+      if (!(sd instanceof Subdevice)) {
+        throw new Error("All subdevices must be Subdevice instances");
+      }
+    }
+    this._catalog().applySubdeviceActions(this.#subdeviceActions);
+
+    const headers = { Authorization: this.#basicAuth(), "Content-Type": "application/json" };
+    if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
+
+    const response = await fetch(this.#rest(`/oauth/apps/${this.#clientId}/subdevices`), {
+      method: "PUT",
+      headers,
+      body: JSON.stringify({
+        subdevices: list.map((sd) => sd.export()),
+        replace,
+      }),
+    });
+    if (!response.ok) throw new Error(`Failed to register subdevices: ${await response.text()}`);
     return response.json();
   }
 
@@ -88,15 +129,23 @@ export default class App {
    * @param {Event[]} events
    * @returns {Promise<void>}
    */
-  async registerEvents(events) {
-    for (const event of events) {
+  async registerEvents(events, { replace = true } = {}) {
+    if (events) {
+      for (const event of events) this.addEvent(event);
+    }
+    const list = this.getEvents();
+
+    for (const event of list) {
       if (!this.#emitterChannelKeys.has(event.id)) {
         this.#emitterChannelKeys.set(event.id, crypto.randomBytes(32));
       }
       event._bindClient(this);
     }
 
-    const response = await this.#put("/events/types", events.map((e) => e.export()));
+    const response = await this.#put(
+      `/events/types?replace=${replace ? "true" : "false"}`,
+      list.map((e) => e.export()),
+    );
     const listeners = response?.listeners || [];
     await Promise.all(listeners.map((l) => this.#sendAuthGrant(l.listenerClientId, l.listenerPubKey, l.eventId, l.subscriptionId)));
   }
@@ -227,10 +276,19 @@ export default class App {
           break;
 
         case "actions/plsExec": {
-          const { action, parameters, caller } = data;
-          const actionObj = this.#actions.get(action);
-          if (!actionObj) return res.status(404).json({ error: { message: `Unknown action: ${action}` } });
-          Promise.resolve(actionObj.exec(parameters || {}, caller))
+          const { action, parameters, caller, externalId, subdeviceId } = data;
+          let actionObj = this.getAction(action);
+          if (!actionObj && externalId) {
+            actionObj = this.#subdeviceActions.get(externalId)?.get(action);
+          }
+          if (!actionObj) return res.status(404).json({ error: { message: `Unknown action: ${action}${externalId ? ` for ${externalId}` : ""}` } });
+          const execContext = {
+            externalId: externalId ?? null,
+            targetId: subdeviceId ?? null,
+            subdeviceId: subdeviceId ?? null,
+            subdevice: externalId ? this.getSubdevice(externalId) : null,
+          };
+          Promise.resolve(actionObj.exec(parameters || {}, caller, execContext))
             .then((result) => res.json(result))
             .catch((err) => res.status(500).json({ error: { message: err.message } }));
           break;
