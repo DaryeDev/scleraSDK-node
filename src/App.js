@@ -1,6 +1,7 @@
 import crypto from "crypto";
 import ResourceHost from "./ResourceHost.js";
 import Subdevice from "./Subdevice.js";
+import { buildSubdevicePublicId } from "./subdeviceId.js";
 
 export default class App extends ResourceHost {
   #clientId;
@@ -8,13 +9,15 @@ export default class App extends ResourceHost {
   #scleraUrl;
   #apiBasePath;
   #webhookSigningSecret;
+  #isHub;
+  #appInternalId = null;
   /** @type {Map<string, Map<string, import('./Action.js').default>>} */
   #subdeviceActions = new Map();
   #eventHandlers = {};
 
   // Event system state
   #ecdh; // ECDH P-256 key pair — persists for the lifetime of the instance
-  #emitterChannelKeys = new Map(); // eventId → Buffer(32)
+  #emitterChannelKeys = new Map(); // "emitterId:eventId" or eventId (hub) → Buffer(32)
   #channelKeys = new Map(); // "emitterId:eventId" → Buffer(32)
   #eventCallbacks = new Map(); // "emitterId:eventId" → handler
 
@@ -27,6 +30,7 @@ export default class App extends ResourceHost {
    * @param {string} [opts.webhookSigningSecret]  Plain-text webhook signing secret
    *   (value of SCLERA_WEBHOOK_SIGNING_SECRET). When provided, webhookHandler()
    *   automatically verifies every incoming request signature.
+   * @param {boolean} [opts.isHub]  When true, declares this OAuth app as a Sclera hub on registerActions/registerSubdevices.
    * @param {import('./Action.js').default[]} [opts.actions]
    * @param {import('./Event.js').default[]} [opts.events]
    * @param {import('./Subdevice.js').default[]} [opts.subdevices]
@@ -37,6 +41,7 @@ export default class App extends ResourceHost {
     scleraUrl = "https://apisclera.darye.dev",
     apiBasePath = "",
     webhookSigningSecret,
+    isHub = false,
     actions = [],
     events = [],
     subdevices = [],
@@ -49,9 +54,63 @@ export default class App extends ResourceHost {
     const trimmed = rawApi.replace(/\/+$/, "");
     this.#apiBasePath = trimmed === "" ? "" : trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
     this.#webhookSigningSecret = webhookSigningSecret ?? null;
+    this.#isHub = !!isHub;
 
     this.#ecdh = crypto.createECDH("prime256v1");
     this.#ecdh.generateKeys();
+    this.#bindAllCatalogResources();
+  }
+
+  addSubdevice(subdevice) {
+    super.addSubdevice(subdevice);
+    this._bindSubdevice(subdevice);
+    return this;
+  }
+
+  removeSubdevice(subdeviceOrExternalId) {
+    const key =
+      typeof subdeviceOrExternalId === "string"
+        ? subdeviceOrExternalId
+        : subdeviceOrExternalId?.externalId;
+    const sd = key ? this.getSubdevice(key) : undefined;
+    if (sd) sd._unbindHost();
+    super.removeSubdevice(subdeviceOrExternalId);
+    return this;
+  }
+
+  _bindSubdevice(subdevice) {
+    subdevice._bindHost({
+      client: this,
+      scheduleSubdeviceSync: () => {},
+      rekeySubdevice: (oldKey, sd) => this._catalog().rekeySubdevice(oldKey, sd),
+      getPublicId: () =>
+        this.#appInternalId
+          ? buildSubdevicePublicId(this.#appInternalId, subdevice.externalId)
+          : null,
+    });
+    subdevice._refreshEventBindings();
+  }
+
+  #bindAllCatalogResources() {
+    for (const sd of this.getSubdevices()) this._bindSubdevice(sd);
+  }
+
+  #emitterChannelKey(emitterId, eventId) {
+    return emitterId ? `${emitterId}:${eventId}` : eventId;
+  }
+
+  #prepareSubdeviceEventKeys(subdevices) {
+    const parentId = this.#appInternalId;
+    if (!parentId) return;
+    for (const sd of subdevices) {
+      const emitterId = buildSubdevicePublicId(parentId, sd.externalId);
+      for (const event of sd.getEventsArray()) {
+        const key = this.#emitterChannelKey(emitterId, event.id);
+        if (!this.#emitterChannelKeys.has(key)) {
+          this.#emitterChannelKeys.set(key, crypto.randomBytes(32));
+        }
+      }
+    }
   }
 
   #rest(path) {
@@ -66,10 +125,13 @@ export default class App extends ResourceHost {
       for (const action of actions) this.addAction(action);
     }
     const list = this.getActions();
+    const body = { actions: list.map((a) => a.export()), replace };
+    if (this.#isHub) body.is_hub = true;
+
     const response = await fetch(this.#rest(`/oauth/apps/${this.#clientId}/actions`), {
       method: "PUT",
       headers: { Authorization: this.#basicAuth(), "Content-Type": "application/json" },
-      body: JSON.stringify({ actions: list.map((a) => a.export()), replace }),
+      body: JSON.stringify(body),
     });
     if (!response.ok) throw new Error(`Failed to register actions: ${await response.text()}`);
     return response.json();
@@ -99,16 +161,34 @@ export default class App extends ResourceHost {
     const headers = { Authorization: this.#basicAuth(), "Content-Type": "application/json" };
     if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
 
+    const body = {
+      subdevices: list.map((sd) => sd.export()),
+      replace,
+    };
+    if (this.#isHub && !accessToken) body.is_hub = true;
+
     const response = await fetch(this.#rest(`/oauth/apps/${this.#clientId}/subdevices`), {
       method: "PUT",
       headers,
-      body: JSON.stringify({
-        subdevices: list.map((sd) => sd.export()),
-        replace,
-      }),
+      body: JSON.stringify(body),
     });
     if (!response.ok) throw new Error(`Failed to register subdevices: ${await response.text()}`);
-    return response.json();
+
+    const result = await response.json();
+    const rows = result?.subdevices ?? result?.rows ?? [];
+    if (rows.length > 0 && rows[0].parentId) {
+      this.#appInternalId = rows[0].parentId;
+    }
+    this.#prepareSubdeviceEventKeys(list);
+    for (const sd of list) sd._refreshEventBindings();
+
+    const listeners = result?.listeners || [];
+    await Promise.all(
+      listeners.map((l) =>
+        this.#sendAuthGrant(l.listenerClientId, l.listenerPubKey, l.eventId, l.subscriptionId, l.emitterId),
+      ),
+    );
+    return result;
   }
 
   async execAction(actionId, parameters, timeout = 10000, { accessToken } = {}) {
@@ -136,8 +216,9 @@ export default class App extends ResourceHost {
     const list = this.getEvents();
 
     for (const event of list) {
-      if (!this.#emitterChannelKeys.has(event.id)) {
-        this.#emitterChannelKeys.set(event.id, crypto.randomBytes(32));
+      const key = this.#emitterChannelKey(null, event.id);
+      if (!this.#emitterChannelKeys.has(key)) {
+        this.#emitterChannelKeys.set(key, crypto.randomBytes(32));
       }
       event._bindClient(this);
     }
@@ -147,7 +228,11 @@ export default class App extends ResourceHost {
       list.map((e) => e.export()),
     );
     const listeners = response?.listeners || [];
-    await Promise.all(listeners.map((l) => this.#sendAuthGrant(l.listenerClientId, l.listenerPubKey, l.eventId, l.subscriptionId)));
+    await Promise.all(
+      listeners.map((l) =>
+        this.#sendAuthGrant(l.listenerClientId, l.listenerPubKey, l.eventId, l.subscriptionId, l.emitterId),
+      ),
+    );
   }
 
   /**
@@ -156,11 +241,17 @@ export default class App extends ResourceHost {
    * @param {object} payload
    * @param {string[]} [targetListenerIds]
    * @param {string[]} [targetUserIds]
+   * @param {{ emitterId?: string }} [opts]
    * @returns {Promise<{delivered: number, failed: Array}>}
    */
-  async emitEvent(eventId, payload, targetListenerIds, targetUserIds) {
-    const channelKey = this.#emitterChannelKeys.get(eventId);
-    if (!channelKey) throw new Error(`Event "${eventId}" not registered. Call registerEvents() first.`);
+  async emitEvent(eventId, payload, targetListenerIds, targetUserIds, { emitterId } = {}) {
+    const key = this.#emitterChannelKey(emitterId ?? null, eventId);
+    const channelKey = this.#emitterChannelKeys.get(key);
+    if (!channelKey) {
+      throw new Error(
+        `Event "${eventId}" is not registered. Call registerEvents() or registerSubdevices() first.`,
+      );
+    }
 
     const iv = crypto.randomBytes(12);
     const cipher = crypto.createCipheriv("aes-256-gcm", channelKey, iv);
@@ -170,6 +261,7 @@ export default class App extends ResourceHost {
 
     const result = await this.#post("/events/emit", {
       eventId,
+      ...(emitterId ? { emitterId } : {}),
       encryptedPayload: ct,
       iv: iv.toString("base64"),
       authTag,
@@ -314,8 +406,9 @@ export default class App extends ResourceHost {
 
   // ── Internal crypto ───────────────────────────────────────────────────────
 
-  async #sendAuthGrant(listenerClientId, listenerPubKey, eventId, subscriptionId = null) {
-    const channelKey = this.#emitterChannelKeys.get(eventId);
+  async #sendAuthGrant(listenerClientId, listenerPubKey, eventId, subscriptionId = null, emitterId = null) {
+    const key = this.#emitterChannelKey(emitterId ?? null, eventId);
+    const channelKey = this.#emitterChannelKeys.get(key);
     if (!channelKey) return;
 
     const ephemeral = crypto.createECDH("prime256v1");
@@ -332,6 +425,7 @@ export default class App extends ResourceHost {
       targetListenerClientId: listenerClientId,
       subscriptionId,
       eventId,
+      ...(emitterId ? { emitterId } : {}),
       encryptedKey: ct.toString("base64"),
       iv: iv.toString("base64"),
       authTag: authTag.toString("base64"),
@@ -340,8 +434,8 @@ export default class App extends ResourceHost {
   }
 
   #handleSubGranted(data) {
-    const { listenerClientId, listenerPubKey, eventId, subscriptionId } = data;
-    this.#sendAuthGrant(listenerClientId, listenerPubKey, eventId, subscriptionId).catch((err) =>
+    const { listenerClientId, listenerPubKey, eventId, subscriptionId, emitterId } = data;
+    this.#sendAuthGrant(listenerClientId, listenerPubKey, eventId, subscriptionId, emitterId).catch((err) =>
       console.error("[sclera/app] Failed to send authGrant:", err.message)
     );
   }
