@@ -1,8 +1,8 @@
 import ActionParameter from "./ActionParameter.js";
+import ActionOutput from "./ActionOutput.js";
 import MutableResource from "./MutableResource.js";
 import { requireResourceId, parseResourceCtorArg } from "./resourceId.js";
-
-const VALID_OUTPUT_TYPES = ["string", "number", "boolean", "object", "array"];
+import { normalizeOptionalColor } from "./color.js";
 
 /**
  * @typedef {object} ActionExecContext
@@ -12,29 +12,57 @@ const VALID_OUTPUT_TYPES = ["string", "number", "boolean", "object", "array"];
  * @property {import('./Subdevice.js').default | null} [subdevice]  Resolved subdevice when available.
  */
 
+/**
+ * @param {unknown} raw
+ * @param {ActionOutput[]} outputs
+ * @param {string} actionId
+ */
+export function normalizeExecResult(raw, outputs, actionId) {
+  if (!outputs.length) return raw;
+
+  if (outputs.length === 1) {
+    const id = outputs[0].id;
+    if (raw !== null && typeof raw === "object" && !Array.isArray(raw) && id in raw) {
+      return raw;
+    }
+    return { [id]: raw };
+  }
+
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error(
+      `Action "${actionId}" with multiple outputs must return an object keyed by output id`,
+    );
+  }
+  return raw;
+}
+
 export default class Action extends MutableResource {
   #id;
   #name;
   #description;
+  #color;
   #parameters = [];
-  #output;
+  #outputs = [];
   #exec;
   /** @type {Map<ActionParameter, () => void>} */
   #parameterUnsubs = new Map();
+  /** @type {Map<ActionOutput, () => void>} */
+  #outputUnsubs = new Map();
 
   /**
-   * @param {string | object} arg  Resource id, or `{ id, name?, description?, parameters?, output?, exec? }`.
+   * @param {string | object} arg  Resource id, or `{ id, name?, description?, parameters?, outputs?, exec? }`.
    * @param {string} arg.id  Immutable action id (required when arg is an object).
    */
   constructor(arg) {
     super();
-    const { id, name, description, parameters = [], output, exec } = parseResourceCtorArg(arg);
+    const { id, name, description, parameters = [], outputs = [], exec, color } = parseResourceCtorArg(arg);
     this.#id = requireResourceId(id, "Action");
     if (name) this.setName(name, { sync: false });
     if (description !== undefined) this.setDescription(description, { sync: false });
-    if (output !== undefined) this.setOutput(output, { sync: false });
+    if (color !== undefined) this.setColor(color, { sync: false });
     if (exec) this.setExec(exec);
     for (const p of parameters) this.addParameter(p, { sync: false });
+    for (const o of outputs) this.addOutput(o, { sync: false });
   }
 
   #bindParameter(parameter, opts) {
@@ -48,6 +76,20 @@ export default class Action extends MutableResource {
     if (unsub) {
       unsub();
       this.#parameterUnsubs.delete(parameter);
+    }
+  }
+
+  #bindOutput(output, opts) {
+    if (this.#outputUnsubs.has(output)) return;
+    const unsub = output.onChange((pOpts) => this._notifyChange(pOpts ?? opts));
+    this.#outputUnsubs.set(output, unsub);
+  }
+
+  #unbindOutput(output) {
+    const unsub = this.#outputUnsubs.get(output);
+    if (unsub) {
+      unsub();
+      this.#outputUnsubs.delete(output);
     }
   }
 
@@ -65,6 +107,12 @@ export default class Action extends MutableResource {
       throw new Error("Action description must be a string");
     }
     this.#description = description;
+    this._notifyChange(opts);
+    return this;
+  }
+
+  setColor(color, opts) {
+    this.#color = normalizeOptionalColor(color);
     this._notifyChange(opts);
     return this;
   }
@@ -91,14 +139,24 @@ export default class Action extends MutableResource {
     return this;
   }
 
-  setOutput(output, opts) {
-    if (typeof output !== "object" || output === null || Array.isArray(output)) {
-      throw new Error("output must be an object with at least a 'type' field");
+  addOutput(output, opts) {
+    if (!(output instanceof ActionOutput)) {
+      throw new Error("output must be an ActionOutput instance");
     }
-    if (!VALID_OUTPUT_TYPES.includes(output.type)) {
-      throw new Error(`output.type must be one of: ${VALID_OUTPUT_TYPES.join(", ")}`);
+    this.#bindOutput(output, opts);
+    this.#outputs.push(output);
+    this._notifyChange(opts);
+    return this;
+  }
+
+  setOutputs(outputs, opts) {
+    if (!Array.isArray(outputs) || outputs.some((o) => !(o instanceof ActionOutput))) {
+      throw new Error("outputs must be an array of ActionOutput instances");
     }
-    this.#output = { ...output };
+    for (const unsub of this.#outputUnsubs.values()) unsub();
+    this.#outputUnsubs.clear();
+    for (const o of outputs) this.#bindOutput(o, opts);
+    this.#outputs = outputs;
     this._notifyChange(opts);
     return this;
   }
@@ -183,7 +241,8 @@ export default class Action extends MutableResource {
       ? /** @type {ActionExecContext} */ (targetSpec)
       : this.#contextFromTargetSpec(targetSpec);
 
-    return await this.#exec(params ?? {}, caller, context);
+    const raw = await this.#exec(params ?? {}, caller, context);
+    return normalizeExecResult(raw, this.#outputs, this.#id);
   }
 
   export() {
@@ -195,8 +254,9 @@ export default class Action extends MutableResource {
     };
 
     if (this.#description !== undefined) obj.description = this.#description;
+    if (this.#color !== undefined) obj.color = this.#color;
     if (this.#parameters.length > 0) obj.parameters = this.#parameters.map((p) => p.export());
-    if (this.#output) obj.output = this.#output;
+    if (this.#outputs.length > 0) obj.outputs = this.#outputs.map((o) => o.export());
 
     return obj;
   }

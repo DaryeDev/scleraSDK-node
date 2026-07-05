@@ -6,6 +6,7 @@ import ResourceHost from "./ResourceHost.js";
 import Subdevice from "./Subdevice.js";
 import { buildSubdevicePublicId } from "./subdeviceId.js";
 import { normalizeRegisterOpts } from "./syncOptions.js";
+import { normalizeOptionalColor } from "./color.js";
 
 const SYNC_DEBOUNCE_MS = 50;
 
@@ -30,6 +31,8 @@ export default class ScleraClient extends ResourceHost {
   #hubClientId = null;
   /** @type {Map<string, ReturnType<typeof setTimeout>>} */
   #syncTimers = new Map();
+  /** @type {string | undefined} */
+  #color;
   /** @type {WeakMap<import('./Action.js').default, () => void>} */
   #catalogActionUnsubs = new WeakMap();
   /** @type {WeakMap<import('./Event.js').default, () => void>} */
@@ -39,6 +42,7 @@ export default class ScleraClient extends ResourceHost {
    * @param {object} [opts]
    * @param {string} [opts.url]
    * @param {string} [opts.configPath]
+   * @param {string} [opts.color]
    * @param {import('./Action.js').default[]} [opts.actions]
    * @param {import('./Event.js').default[]} [opts.events]
    * @param {import('./Subdevice.js').default[]} [opts.subdevices]
@@ -46,6 +50,7 @@ export default class ScleraClient extends ResourceHost {
   constructor({
     url = "wss://apisclera.darye.dev/ws",
     configPath = "client_config.json",
+    color,
     actions = [],
     events = [],
     subdevices = [],
@@ -53,6 +58,7 @@ export default class ScleraClient extends ResourceHost {
     super({ actions, events, subdevices });
     this.#url = url;
     this.#configPath = configPath;
+    if (color !== undefined) this.setColor(color);
     if (configPath) this.#loadConfig();
     this.#bindAllCatalogResources();
   }
@@ -196,6 +202,19 @@ export default class ScleraClient extends ResourceHost {
     this.#scheduleResourceSync("subdevices", opts);
   }
 
+  /**
+   * @param {string} color  #RRGGBB accent color for this connection in the flow editor.
+   */
+  setColor(color) {
+    this.#color = normalizeOptionalColor(color);
+    this.scheduleConnectionProfileSync();
+    return this;
+  }
+
+  scheduleConnectionProfileSync(opts) {
+    this.#scheduleResourceSync("connectionProfile", opts);
+  }
+
   #scheduleResourceSync(resource, opts) {
     const { sync, replace } = normalizeRegisterOpts(opts);
     if (!sync || !this.#sessionActive || this.#ws?.readyState !== 1) return;
@@ -227,6 +246,9 @@ export default class ScleraClient extends ResourceHost {
         break;
       case "subdevices":
         await this.registerSubdevices(undefined, { replace, sync: true });
+        break;
+      case "connectionProfile":
+        await this.registerConnectionProfile({ sync: true });
         break;
       default:
         break;
@@ -317,6 +339,24 @@ export default class ScleraClient extends ResourceHost {
     if (subdevices.length > 0) {
       await this.registerSubdevices(undefined, { replace: true, sync: true });
     }
+
+    if (this.#color !== undefined) {
+      await this.registerConnectionProfile({ sync: true });
+    }
+  }
+
+  /**
+   * @param {{ sync?: boolean }} [opts]
+   */
+  async registerConnectionProfile(opts = {}) {
+    const { sync } = normalizeRegisterOpts(opts);
+    if (this.#color === undefined) {
+      return { ok: true, localOnly: true, color: null };
+    }
+    if (!sync) return { ok: true, localOnly: true, color: this.#color };
+    return await this.sendAndWaitForResponse("connection/setProfile", {
+      color: this.#color,
+    });
   }
 
   async pair({
@@ -680,7 +720,11 @@ export default class ScleraClient extends ResourceHost {
       const pending = this.#pendingResponses.get(messageId);
       this.#pendingResponses.delete(messageId);
       clearTimeout(pending.timer);
-      if (error) pending.reject(new Error(error.message || "Error"));
+      if (error) {
+        const detail =
+          error.details != null ? ` ${JSON.stringify(error.details)}` : "";
+        pending.reject(new Error((error.message || "Error") + detail));
+      }
       else pending.resolve(data);
       return;
     }

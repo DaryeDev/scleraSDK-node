@@ -2,6 +2,7 @@ import crypto from "crypto";
 import ResourceHost from "./ResourceHost.js";
 import Subdevice from "./Subdevice.js";
 import { buildSubdevicePublicId } from "./subdeviceId.js";
+import { normalizeOptionalColor } from "./color.js";
 
 export default class App extends ResourceHost {
   #clientId;
@@ -10,6 +11,7 @@ export default class App extends ResourceHost {
   #apiBasePath;
   #webhookSigningSecret;
   #isHub;
+  #color;
   #appInternalId = null;
   /** @type {Map<string, Map<string, import('./Action.js').default>>} */
   #subdeviceActions = new Map();
@@ -31,6 +33,7 @@ export default class App extends ResourceHost {
    *   (value of SCLERA_WEBHOOK_SIGNING_SECRET). When provided, webhookHandler()
    *   automatically verifies every incoming request signature.
    * @param {boolean} [opts.isHub]  When true, declares this OAuth app as a Sclera hub on registerActions/registerSubdevices.
+   * @param {string} [opts.color]
    * @param {import('./Action.js').default[]} [opts.actions]
    * @param {import('./Event.js').default[]} [opts.events]
    * @param {import('./Subdevice.js').default[]} [opts.subdevices]
@@ -42,6 +45,7 @@ export default class App extends ResourceHost {
     apiBasePath = "",
     webhookSigningSecret,
     isHub = false,
+    color,
     actions = [],
     events = [],
     subdevices = [],
@@ -55,6 +59,7 @@ export default class App extends ResourceHost {
     this.#apiBasePath = trimmed === "" ? "" : trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
     this.#webhookSigningSecret = webhookSigningSecret ?? null;
     this.#isHub = !!isHub;
+    if (color !== undefined) this.setColor(color);
 
     this.#ecdh = crypto.createECDH("prime256v1");
     this.#ecdh.generateKeys();
@@ -93,6 +98,27 @@ export default class App extends ResourceHost {
 
   #bindAllCatalogResources() {
     for (const sd of this.getSubdevices()) this._bindSubdevice(sd);
+  }
+
+  /**
+   * @param {string} color  #RRGGBB accent color for this connection in the flow editor.
+   */
+  setColor(color) {
+    this.#color = normalizeOptionalColor(color);
+    return this;
+  }
+
+  async registerConnectionProfile() {
+    if (this.#color === undefined) {
+      return { success: true, color: null };
+    }
+    const response = await fetch(this.#rest(`/oauth/apps/${this.#clientId}/profile`), {
+      method: "PUT",
+      headers: { Authorization: this.#basicAuth(), "Content-Type": "application/json" },
+      body: JSON.stringify({ color: this.#color }),
+    });
+    if (!response.ok) throw new Error(`Failed to register connection profile: ${await response.text()}`);
+    return response.json();
   }
 
   #emitterChannelKey(emitterId, eventId) {
@@ -134,7 +160,9 @@ export default class App extends ResourceHost {
       body: JSON.stringify(body),
     });
     if (!response.ok) throw new Error(`Failed to register actions: ${await response.text()}`);
-    return response.json();
+    const result = await response.json();
+    if (this.#color !== undefined) await this.registerConnectionProfile();
+    return result;
   }
 
   /** Actions currently stored on the server for this OAuth app (JSON schema, not Action instances). */
@@ -188,6 +216,7 @@ export default class App extends ResourceHost {
         this.#sendAuthGrant(l.listenerClientId, l.listenerPubKey, l.eventId, l.subscriptionId, l.emitterId),
       ),
     );
+    if (this.#color !== undefined) await this.registerConnectionProfile();
     return result;
   }
 

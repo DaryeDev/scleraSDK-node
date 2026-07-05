@@ -180,7 +180,7 @@ export default class Event extends MutableResource {
    * @param {string[]} [targetUserIds]
    * @param {string | { emitterId: string }} [emitterSpec]  Required when multiple emitters are registered.
    */
-  emit(payload, targetListenerIds = undefined, targetUserIds = undefined, emitterSpec = undefined) {
+  emit(payload = {}, targetListenerIds = undefined, targetUserIds = undefined, emitterSpec = undefined) {
     if (!this.#client) {
       throw new Error(
         `Event "${this.#id}" is not registered. Call registerEvents() or add it to a Subdevice on a connected hub.`,

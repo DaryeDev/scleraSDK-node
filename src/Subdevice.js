@@ -2,6 +2,7 @@ import crypto from "crypto";
 import Action from "./Action.js";
 import Event from "./Event.js";
 import MutableResource from "./MutableResource.js";
+import { normalizeOptionalColor } from "./color.js";
 
 const EXTERNAL_ID_RE = /^[a-zA-Z0-9._-]{1,128}$/;
 
@@ -9,6 +10,7 @@ export default class Subdevice extends MutableResource {
   #externalId;
   #name;
   #deviceType;
+  #color;
   #metadata;
   #connected = true;
   /** @type {Map<string, Action>} */
@@ -31,16 +33,18 @@ export default class Subdevice extends MutableResource {
    * @param {string} [opts.externalId]
    * @param {string} opts.name
    * @param {string} [opts.deviceType]
+   * @param {string} [opts.color]
    * @param {boolean} [opts.connected]
    * @param {object} [opts.metadata]
    * @param {Action[]} [opts.actions]
    * @param {Event[]} [opts.events]
    */
-  constructor({ externalId, name, deviceType, connected, metadata, actions = [], events = [] } = {}) {
+  constructor({ externalId, name, deviceType, color, connected, metadata, actions = [], events = [] } = {}) {
     super();
     if (name) this.#name = name;
     if (externalId) this.setExternalId(externalId, { sync: false });
     if (deviceType) this.#deviceType = deviceType;
+    if (color !== undefined) this.setColor(color, { sync: false });
     if (connected !== undefined) this.#connected = !!connected;
     if (metadata !== undefined) this.#metadata = metadata;
     for (const action of actions) this.addAction(action, { sync: false });
@@ -170,6 +174,12 @@ export default class Subdevice extends MutableResource {
     return this;
   }
 
+  setColor(color, opts) {
+    this.#color = normalizeOptionalColor(color);
+    this._notifyChange(opts);
+    return this;
+  }
+
   setMetadata(metadata, opts) {
     this.#metadata = metadata;
     this._notifyChange(opts);
@@ -286,6 +296,7 @@ export default class Subdevice extends MutableResource {
       name: this.#name,
       connected: this.#connected,
       ...(this.#deviceType && { deviceType: this.#deviceType }),
+      ...(this.#color !== undefined && { color: this.#color }),
       ...(this.#metadata !== undefined && { metadata: this.#metadata }),
       actions: this.getActionsArray().map((a) => a.export()),
       events: this.getEventsArray().map((e) => e.export()),
