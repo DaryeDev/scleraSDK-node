@@ -6,6 +6,8 @@ export { default as Personal } from "./Personal.js";
 export { default as App } from "./App.js";
 export { default as Event } from "./Event.js";
 export { default as EventPayloadVariable } from "./EventPayloadVariable.js";
+export { default as EventParameter } from "./EventParameter.js";
+export { matchEventParameters, matchValuesFromPayload } from "./eventParameterMatch.js";
 export { default as Subdevice } from "./Subdevice.js";
 export { default as MutableResource } from "./MutableResource.js";
 export { default as ResourceChangeNotifier } from "./ResourceChangeNotifier.js";

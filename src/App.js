@@ -3,6 +3,7 @@ import ResourceHost from "./ResourceHost.js";
 import Subdevice from "./Subdevice.js";
 import { buildSubdevicePublicId } from "./subdeviceId.js";
 import { normalizeOptionalColor } from "./color.js";
+import { matchEventParameters } from "./eventParameterMatch.js";
 
 export default class App extends ResourceHost {
   #clientId;
@@ -22,6 +23,8 @@ export default class App extends ResourceHost {
   #emitterChannelKeys = new Map(); // "emitterId:eventId" or eventId (hub) → Buffer(32)
   #channelKeys = new Map(); // "emitterId:eventId" → Buffer(32)
   #eventCallbacks = new Map(); // "emitterId:eventId" → handler
+  /** @type {Map<string, Map<string, object>>} emitterId:eventId → listenerClientId → parameters */
+  #listenerParams = new Map();
 
   /**
    * @param {object} opts
@@ -211,6 +214,7 @@ export default class App extends ResourceHost {
     for (const sd of list) sd._refreshEventBindings();
 
     const listeners = result?.listeners || [];
+    this.#rememberListeners(listeners);
     await Promise.all(
       listeners.map((l) =>
         this.#sendAuthGrant(l.listenerClientId, l.listenerPubKey, l.eventId, l.subscriptionId, l.emitterId),
@@ -257,6 +261,7 @@ export default class App extends ResourceHost {
       list.map((e) => e.export()),
     );
     const listeners = response?.listeners || [];
+    this.#rememberListeners(listeners);
     await Promise.all(
       listeners.map((l) =>
         this.#sendAuthGrant(l.listenerClientId, l.listenerPubKey, l.eventId, l.subscriptionId, l.emitterId),
@@ -268,7 +273,7 @@ export default class App extends ResourceHost {
    * Encrypts and emits a payload via HTTP.
    * @param {string} eventId
    * @param {object} payload
-   * @param {string[]} [targetListenerIds]
+   * @param {string[] | object} [targetListenerIds]
    * @param {string[]} [targetUserIds]
    * @param {{ emitterId?: string }} [opts]
    * @returns {Promise<{delivered: number, failed: Array}>}
@@ -302,16 +307,79 @@ export default class App extends ResourceHost {
 
   // ── Event system — Listener ───────────────────────────────────────────────
 
-  async subscribeToEvent(emitterId, eventId, handler) {
+  /**
+   * @param {string} emitterId
+   * @param {string} eventId
+   * @param {Function | object} handlerOrOpts
+   * @param {object} [parameters]
+   */
+  async subscribeToEvent(emitterId, eventId, handlerOrOpts, parameters) {
+    let handler = handlerOrOpts;
+    let params = parameters;
+    if (handlerOrOpts && typeof handlerOrOpts === "object" && typeof handlerOrOpts !== "function") {
+      handler = handlerOrOpts.handler;
+      params = handlerOrOpts.parameters;
+    }
     const listenerPubKey = this.#ecdh.getPublicKey("base64");
-    this.#eventCallbacks.set(`${emitterId}:${eventId}`, handler);
-    return this.#post("/events/subscribe", { emitterId, eventId, listenerPubKey });
+    if (handler) this.#eventCallbacks.set(`${emitterId}:${eventId}`, handler);
+    return this.#post("/events/subscribe", {
+      emitterId,
+      eventId,
+      listenerPubKey,
+      ...(params !== undefined ? { parameters: params } : {}),
+    });
+  }
+
+  async updateSubscriptionParams(emitterId, eventId, parameters) {
+    return this.#post("/events/updateParams", { emitterId, eventId, parameters });
   }
 
   async unsubscribeFromEvent(emitterId, eventId) {
     this.#channelKeys.delete(`${emitterId}:${eventId}`);
     this.#eventCallbacks.delete(`${emitterId}:${eventId}`);
     return this.#post("/events/unsubscribe", { emitterId, eventId });
+  }
+
+  _resolveListenersForMatch(eventId, match, { emitterId } = {}) {
+    const mapKey = this.#listenerParamsKey(emitterId ?? null, eventId);
+    const listeners = this.#listenerParams.get(mapKey);
+    if (!listeners || listeners.size === 0) return [];
+    const ids = [];
+    for (const [listenerClientId, params] of listeners) {
+      if (matchEventParameters(params || {}, match)) ids.push(listenerClientId);
+    }
+    return ids;
+  }
+
+  #normalizeEmitterKey(emitterId) {
+    if (emitterId == null || emitterId === "") return null;
+    if (this.#appInternalId && emitterId === this.#appInternalId) return null;
+    return emitterId;
+  }
+
+  #listenerParamsKey(emitterId, eventId) {
+    return `${this.#normalizeEmitterKey(emitterId) ?? ""}:${eventId}`;
+  }
+
+  #rememberListener(listener) {
+    if (!listener?.listenerClientId || !listener?.eventId) return;
+    // Learn hub app UUID from wire notifications when subdevices were never registered
+    const rawEmitter = listener.emitterId;
+    if (
+      rawEmitter
+      && typeof rawEmitter === "string"
+      && !rawEmitter.includes(":")
+      && !this.#appInternalId
+    ) {
+      this.#appInternalId = rawEmitter;
+    }
+    const mapKey = this.#listenerParamsKey(rawEmitter, listener.eventId);
+    if (!this.#listenerParams.has(mapKey)) this.#listenerParams.set(mapKey, new Map());
+    this.#listenerParams.get(mapKey).set(listener.listenerClientId, listener.parameters || {});
+  }
+
+  #rememberListeners(listeners) {
+    for (const l of listeners || []) this.#rememberListener(l);
   }
 
   // ── Event system — Authorizer ─────────────────────────────────────────────
@@ -369,6 +437,11 @@ export default class App extends ResourceHost {
           this.#handleSubGranted(data);
           break;
 
+        case "events/subParamsUpdated":
+          res.json({ ok: true });
+          this.#handleSubParamsUpdated(data);
+          break;
+
         case "events/authGrant":
           this.#handleAuthGrant(data);
           res.json({ ok: true });
@@ -387,6 +460,9 @@ export default class App extends ResourceHost {
         case "events/subscriptionRevoked":
           this.#channelKeys.delete(`${data.emitterId}:${data.eventId}`);
           this.#eventCallbacks.delete(`${data.emitterId}:${data.eventId}`);
+          this.#listenerParams
+            .get(this.#listenerParamsKey(data.emitterId, data.eventId))
+            ?.delete(data.listenerClientId);
           res.json({ ok: true });
           this.#emitEvent("events/subscriptionRevoked", data);
           break;
@@ -463,10 +539,27 @@ export default class App extends ResourceHost {
   }
 
   #handleSubGranted(data) {
-    const { listenerClientId, listenerPubKey, eventId, subscriptionId, emitterId } = data;
+    const { listenerClientId, listenerPubKey, eventId, subscriptionId, emitterId, parameters } = data;
+    this.#rememberListener({
+      listenerClientId,
+      eventId,
+      emitterId: emitterId ?? null,
+      parameters: parameters || {},
+    });
     this.#sendAuthGrant(listenerClientId, listenerPubKey, eventId, subscriptionId, emitterId).catch((err) =>
       console.error("[sclera/app] Failed to send authGrant:", err.message)
     );
+  }
+
+  #handleSubParamsUpdated(data) {
+    const { listenerClientId, eventId, emitterId, parameters } = data;
+    this.#rememberListener({
+      listenerClientId,
+      eventId,
+      emitterId: emitterId ?? null,
+      parameters: parameters || {},
+    });
+    this.#emitEvent("events/subParamsUpdated", data);
   }
 
   #handleAuthGrant(data) {

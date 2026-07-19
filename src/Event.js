@@ -1,6 +1,8 @@
 import EventPayloadVariable from "./EventPayloadVariable.js";
+import EventParameter from "./EventParameter.js";
 import MutableResource from "./MutableResource.js";
 import { requireResourceId, parseResourceCtorArg } from "./resourceId.js";
+import { matchValuesFromPayload } from "./eventParameterMatch.js";
 
 /** @typedef {string | null} EmitterKey  null = hub client (omit emitterId on wire) */
 
@@ -10,11 +12,14 @@ export default class Event extends MutableResource {
   #description;
   #autoAccept = true;
   #payloadVariables = [];
+  #parameters = [];
   #client = null;
   /** @type {Set<EmitterKey>} */
   #registeredEmitters = new Set();
   /** @type {Map<EventPayloadVariable, () => void>} */
   #payloadVarUnsubs = new Map();
+  /** @type {Map<EventParameter, () => void>} */
+  #paramUnsubs = new Map();
 
   /**
    * @param {string | object} arg  Event id, or options object with required `id`.
@@ -27,6 +32,7 @@ export default class Event extends MutableResource {
       description,
       autoAccept,
       payloadVariables = [],
+      parameters = [],
     } = parseResourceCtorArg(arg);
     this.#id = requireResourceId(id, "Event");
     if (name) this.setName(name, { sync: false });
@@ -34,6 +40,9 @@ export default class Event extends MutableResource {
     if (autoAccept !== undefined) this.setAutoAccept(autoAccept, { sync: false });
     if (payloadVariables.length > 0) {
       this.setPayloadVariables(payloadVariables, { sync: false });
+    }
+    if (parameters.length > 0) {
+      this.setParameters(parameters, { sync: false });
     }
   }
 
@@ -46,6 +55,17 @@ export default class Event extends MutableResource {
   #clearPayloadVariableBindings() {
     for (const unsub of this.#payloadVarUnsubs.values()) unsub();
     this.#payloadVarUnsubs.clear();
+  }
+
+  #bindParameter(parameter, opts) {
+    if (this.#paramUnsubs.has(parameter)) return;
+    const unsub = parameter.onChange((pOpts) => this._notifyChange(pOpts ?? opts));
+    this.#paramUnsubs.set(parameter, unsub);
+  }
+
+  #clearParameterBindings() {
+    for (const unsub of this.#paramUnsubs.values()) unsub();
+    this.#paramUnsubs.clear();
   }
 
   setName(name, opts) {
@@ -85,8 +105,31 @@ export default class Event extends MutableResource {
     return this;
   }
 
+  setParameters(params, opts) {
+    this.#clearParameterBindings();
+    this.#parameters = params;
+    for (const p of params) {
+      if (p instanceof EventParameter) this.#bindParameter(p, opts);
+    }
+    this._notifyChange(opts);
+    return this;
+  }
+
+  addParameter(parameter, opts) {
+    if (parameter instanceof EventParameter) {
+      this.#bindParameter(parameter, opts);
+    }
+    this.#parameters.push(parameter);
+    this._notifyChange(opts);
+    return this;
+  }
+
   get id() {
     return this.#id;
+  }
+
+  get parameters() {
+    return [...this.#parameters];
   }
 
   /**
@@ -174,22 +217,68 @@ export default class Event extends MutableResource {
     return resolved;
   }
 
+  #emitOptions(payload, arg2, arg3, arg4) {
+    // emit(payload, { match, targetListenerIds, targetUserIds, emitter })
+    if (arg2 != null && typeof arg2 === "object" && !Array.isArray(arg2)) {
+      const opts = arg2;
+      return {
+        payload,
+        match: opts.match,
+        targetListenerIds: opts.targetListenerIds,
+        targetUserIds: opts.targetUserIds,
+        emitterSpec: opts.emitter ?? opts.emitterSpec ?? arg3,
+      };
+    }
+    // emit(payload, targetListenerIds?, targetUserIds?, emitterSpec?)
+    return {
+      payload,
+      targetListenerIds: arg2,
+      targetUserIds: arg3,
+      emitterSpec: arg4,
+    };
+  }
+
   /**
    * @param {object} payload
-   * @param {string[]} [targetListenerIds]
+   * @param {string[] | object} [targetListenerIdsOrOpts]
    * @param {string[]} [targetUserIds]
    * @param {string | { emitterId: string }} [emitterSpec]  Required when multiple emitters are registered.
    */
-  emit(payload = {}, targetListenerIds = undefined, targetUserIds = undefined, emitterSpec = undefined) {
+  emit(payload = {}, targetListenerIdsOrOpts = undefined, targetUserIds = undefined, emitterSpec = undefined) {
     if (!this.#client) {
       throw new Error(
         `Event "${this.#id}" is not registered. Call registerEvents() or add it to a Subdevice on a connected hub.`,
       );
     }
-    const resolved = this.#resolveEmitter(emitterSpec);
-    return this.#client.emitEvent(this.#id, payload, targetListenerIds, targetUserIds, {
+    const opts = this.#emitOptions(payload, targetListenerIdsOrOpts, targetUserIds, emitterSpec);
+    const resolved = this.#resolveEmitter(opts.emitterSpec);
+
+    let targetListenerIds = opts.targetListenerIds;
+    let targetUserIdsOut = opts.targetUserIds;
+
+    if (opts.match !== undefined) {
+      const matched = this.#client._resolveListenersForMatch(this.#id, opts.match, {
+        emitterId: resolved === null ? undefined : resolved,
+      });
+      targetListenerIds = matched;
+      // When filtering by match, do not also broaden via targetUserIds unless explicitly set
+      if (opts.targetUserIds === undefined) targetUserIdsOut = undefined;
+    }
+
+    return this.#client.emitEvent(this.#id, opts.payload, targetListenerIds, targetUserIdsOut, {
       emitterId: resolved === null ? undefined : resolved,
     });
+  }
+
+  /**
+   * Emit to listeners whose subscription parameters match overlapping payload keys.
+   * @param {object} payload
+   * @param {string | { emitterId: string }} [emitterSpec]
+   */
+  emitMatching(payload = {}, emitterSpec = undefined) {
+    const schema = this.export().parameterSchema;
+    const match = matchValuesFromPayload(payload, schema);
+    return this.emit(payload, { match, emitter: emitterSpec });
   }
 
   export() {
@@ -201,12 +290,23 @@ export default class Event extends MutableResource {
           ),
         }
       : undefined;
+
+    const parameterSchema = this.#parameters.length
+      ? {
+          type: "object",
+          properties: Object.fromEntries(
+            this.#parameters.map((p) => [p.id, p.export()]),
+          ),
+        }
+      : undefined;
+
     return {
       id: this.#id,
       name: this.#name,
       ...(this.#description && { description: this.#description }),
       autoAccept: this.#autoAccept,
       ...(schema && { payloadSchema: schema }),
+      ...(parameterSchema && { parameterSchema }),
     };
   }
 }

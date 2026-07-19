@@ -7,6 +7,7 @@ import Subdevice from "./Subdevice.js";
 import { buildSubdevicePublicId } from "./subdeviceId.js";
 import { normalizeRegisterOpts } from "./syncOptions.js";
 import { normalizeOptionalColor } from "./color.js";
+import { matchEventParameters } from "./eventParameterMatch.js";
 
 const SYNC_DEBOUNCE_MS = 50;
 
@@ -27,6 +28,8 @@ export default class ScleraClient extends ResourceHost {
   #emitterChannelKeys = new Map();
   #channelKeys = new Map();
   #eventCallbacks = new Map();
+  /** @type {Map<string, Map<string, object>>} emitterId:eventId → listenerClientId → parameters */
+  #listenerParams = new Map();
   #sessionActive = false;
   #hubClientId = null;
   /** @type {Map<string, ReturnType<typeof setTimeout>>} */
@@ -477,6 +480,7 @@ export default class ScleraClient extends ResourceHost {
     });
 
     const listeners = response?.listeners || [];
+    this.#rememberListeners(listeners);
     await Promise.all(
       listeners.map((l) =>
         this._sendAuthGrant(
@@ -519,6 +523,7 @@ export default class ScleraClient extends ResourceHost {
     });
 
     const listeners = response?.listeners || [];
+    this.#rememberListeners(listeners);
     await Promise.all(
       listeners.map((l) =>
         this._sendAuthGrant(
@@ -559,14 +564,35 @@ export default class ScleraClient extends ResourceHost {
     });
   }
 
-  async subscribeToEvent(emitterId, eventId, handler) {
+  /**
+   * @param {string} emitterId
+   * @param {string} eventId
+   * @param {Function | object} handlerOrOpts  Handler, or `{ handler, parameters }`
+   * @param {object} [parameters]  Filter parameters when 3rd arg is the handler
+   */
+  async subscribeToEvent(emitterId, eventId, handlerOrOpts, parameters) {
     if (!this.#ecdh) throw new Error("Not connected. Call connect() first.");
+    let handler = handlerOrOpts;
+    let params = parameters;
+    if (handlerOrOpts && typeof handlerOrOpts === "object" && typeof handlerOrOpts !== "function") {
+      handler = handlerOrOpts.handler;
+      params = handlerOrOpts.parameters;
+    }
     const listenerPubKey = this.#ecdh.getPublicKey("base64");
-    this.#eventCallbacks.set(`${emitterId}:${eventId}`, handler);
+    if (handler) this.#eventCallbacks.set(`${emitterId}:${eventId}`, handler);
     return await this.sendAndWaitForResponse("events/subscribe", {
       emitterId,
       eventId,
       listenerPubKey,
+      ...(params !== undefined ? { parameters: params } : {}),
+    });
+  }
+
+  async updateSubscriptionParams(emitterId, eventId, parameters) {
+    return await this.sendAndWaitForResponse("events/updateParams", {
+      emitterId,
+      eventId,
+      parameters,
     });
   }
 
@@ -574,6 +600,46 @@ export default class ScleraClient extends ResourceHost {
     this.#channelKeys.delete(`${emitterId}:${eventId}`);
     this.#eventCallbacks.delete(`${emitterId}:${eventId}`);
     return await this.sendAndWaitForResponse("events/unsubscribe", { emitterId, eventId });
+  }
+
+  /**
+   * Resolve ACTIVE listener client ids whose stored parameters match `match`.
+   * @param {string} eventId
+   * @param {object} match
+   * @param {{ emitterId?: string }} [opts]
+   * @returns {string[]}
+   */
+  _resolveListenersForMatch(eventId, match, { emitterId } = {}) {
+    const mapKey = this.#listenerParamsKey(emitterId ?? null, eventId);
+    const listeners = this.#listenerParams.get(mapKey);
+    if (!listeners || listeners.size === 0) return [];
+    const ids = [];
+    for (const [listenerClientId, params] of listeners) {
+      if (matchEventParameters(params || {}, match)) ids.push(listenerClientId);
+    }
+    return ids;
+  }
+
+  #normalizeEmitterKey(emitterId) {
+    if (emitterId == null || emitterId === "") return null;
+    // Hub self-emits: wire may send the hub client UUID; local emit uses null
+    if (this.#hubClientId && emitterId === this.#hubClientId) return null;
+    return emitterId;
+  }
+
+  #listenerParamsKey(emitterId, eventId) {
+    return `${this.#normalizeEmitterKey(emitterId) ?? ""}:${eventId}`;
+  }
+
+  #rememberListener(listener) {
+    if (!listener?.listenerClientId || !listener?.eventId) return;
+    const mapKey = this.#listenerParamsKey(listener.emitterId, listener.eventId);
+    if (!this.#listenerParams.has(mapKey)) this.#listenerParams.set(mapKey, new Map());
+    this.#listenerParams.get(mapKey).set(listener.listenerClientId, listener.parameters || {});
+  }
+
+  #rememberListeners(listeners) {
+    for (const l of listeners || []) this.#rememberListener(l);
   }
 
   async getPendingRequests() {
@@ -633,10 +699,27 @@ export default class ScleraClient extends ResourceHost {
   }
 
   _handleSubGranted(data) {
-    const { listenerClientId, listenerPubKey, eventId, subscriptionId, emitterId } = data;
+    const { listenerClientId, listenerPubKey, eventId, subscriptionId, emitterId, parameters } = data;
+    this.#rememberListener({
+      listenerClientId,
+      eventId,
+      emitterId: emitterId ?? null,
+      parameters: parameters || {},
+    });
     this._sendAuthGrant(listenerClientId, listenerPubKey, eventId, subscriptionId, emitterId).catch((err) =>
       console.error("[sclera] Failed to send authGrant:", err.message),
     );
+  }
+
+  _handleSubParamsUpdated(data) {
+    const { listenerClientId, eventId, emitterId, parameters } = data;
+    this.#rememberListener({
+      listenerClientId,
+      eventId,
+      emitterId: emitterId ?? null,
+      parameters: parameters || {},
+    });
+    this.#emit("events/subParamsUpdated", data);
   }
 
   _handleAuthGrant(data) {
@@ -737,6 +820,9 @@ export default class ScleraClient extends ResourceHost {
       case "events/subGranted":
         this._handleSubGranted(data);
         break;
+      case "events/subParamsUpdated":
+        this._handleSubParamsUpdated(data);
+        break;
       case "events/authGrant":
         this._handleAuthGrant(data);
         break;
@@ -749,6 +835,10 @@ export default class ScleraClient extends ResourceHost {
       case "events/subscriptionRevoked":
         this.#channelKeys.delete(`${data.emitterId}:${data.eventId}`);
         this.#eventCallbacks.delete(`${data.emitterId}:${data.eventId}`);
+        {
+          const mapKey = this.#listenerParamsKey(data.emitterId ?? null, data.eventId);
+          this.#listenerParams.get(mapKey)?.delete(data.listenerClientId);
+        }
         this.#emit("events/subscriptionRevoked", data);
         break;
       case "events/subscriptionRejected":
