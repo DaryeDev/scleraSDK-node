@@ -3,6 +3,7 @@ import EventParameter from "./EventParameter.js";
 import MutableResource from "./MutableResource.js";
 import { requireResourceId, parseResourceCtorArg } from "./resourceId.js";
 import { matchValuesFromPayload } from "./eventParameterMatch.js";
+import { validateEventPayload } from "./outputSchemaValidate.js";
 
 /** @typedef {string | null} EmitterKey  null = hub client (omit emitterId on wire) */
 
@@ -264,6 +265,9 @@ export default class Event extends MutableResource {
       // When filtering by match, do not also broaden via targetUserIds unless explicitly set
       if (opts.targetUserIds === undefined) targetUserIdsOut = undefined;
     }
+
+    const exported = this.export();
+    validateEventPayload(opts.payload, exported.payloadSchema);
 
     return this.#client.emitEvent(this.#id, opts.payload, targetListenerIds, targetUserIdsOut, {
       emitterId: resolved === null ? undefined : resolved,
