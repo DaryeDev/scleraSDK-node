@@ -8,21 +8,19 @@ export default class ActionOutput extends MutableResource {
   #name;
   #description;
   #type = "string";
-  #schema;
-  #items;
+  #outputSchema;
 
   /**
    * @param {string | object} arg  Output id, or options object with required `id`.
    */
   constructor(arg) {
     super();
-    const { id, name, description, type, schema, items } = parseResourceCtorArg(arg);
+    const { id, name, description, type, outputSchema } = parseResourceCtorArg(arg);
     this.#id = requireResourceId(id, "ActionOutput");
     if (name) this.setName(name, { sync: false });
     if (description !== undefined) this.setDescription(description, { sync: false });
     if (type) this.setType(type, { sync: false });
-    if (schema !== undefined) this.setSchema(schema, { sync: false });
-    if (items !== undefined) this.setItems(items, { sync: false });
+    if (outputSchema !== undefined) this.setOutputSchema(outputSchema, { sync: false });
   }
 
   setName(name, opts) {
@@ -52,26 +50,21 @@ export default class ActionOutput extends MutableResource {
     return this;
   }
 
-  setSchema(schema, opts) {
+  setOutputSchema(schema, opts) {
     if (typeof schema !== "object" || schema === null || Array.isArray(schema)) {
-      throw new Error("ActionOutput schema must be an object");
+      throw new Error("ActionOutput outputSchema must be an object");
     }
-    this.#schema = { ...schema };
-    this._notifyChange(opts);
-    return this;
-  }
-
-  setItems(items, opts) {
-    if (typeof items !== "object" || items === null || Array.isArray(items)) {
-      throw new Error("ActionOutput items must be an object");
-    }
-    this.#items = { ...items };
+    this.#outputSchema = { ...schema };
     this._notifyChange(opts);
     return this;
   }
 
   get id() {
     return this.#id;
+  }
+
+  get outputSchema() {
+    return this.#outputSchema ? { ...this.#outputSchema } : undefined;
   }
 
   export() {
@@ -84,8 +77,7 @@ export default class ActionOutput extends MutableResource {
     };
 
     if (this.#description !== undefined) obj.description = this.#description;
-    if (this.#schema !== undefined) obj.schema = this.#schema;
-    if (this.#items !== undefined) obj.items = this.#items;
+    if (this.#outputSchema !== undefined) obj.outputSchema = this.#outputSchema;
 
     return obj;
   }

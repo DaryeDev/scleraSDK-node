@@ -3,6 +3,7 @@ import ActionOutput from "./ActionOutput.js";
 import MutableResource from "./MutableResource.js";
 import { requireResourceId, parseResourceCtorArg } from "./resourceId.js";
 import { normalizeOptionalColor } from "./color.js";
+import { validateActionResult } from "./outputSchemaValidate.js";
 
 /**
  * @typedef {object} ActionExecContext
@@ -242,7 +243,14 @@ export default class Action extends MutableResource {
       : this.#contextFromTargetSpec(targetSpec);
 
     const raw = await this.#exec(params ?? {}, caller, context);
-    return normalizeExecResult(raw, this.#outputs, this.#id);
+    const normalized = normalizeExecResult(raw, this.#outputs, this.#id);
+    if (this.#outputs.length) {
+      validateActionResult(
+        normalized,
+        this.#outputs.map((o) => o.export()),
+      );
+    }
+    return normalized;
   }
 
   export() {
