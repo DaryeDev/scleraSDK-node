@@ -1,5 +1,6 @@
 export { default as Action } from "./Action.js";
-export { default as ActionParameter } from "./ActionParameter.js";
+export { default as ActionParameter, resolveActionParameterDisplay } from "./ActionParameter.js";
+export { default as EnumValue } from "./EnumValue.js";
 export { default as ActionOutput } from "./ActionOutput.js";
 export { default as Device } from "./Device.js";
 export { default as Personal } from "./Personal.js";
