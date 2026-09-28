@@ -13,3 +13,14 @@ export { default as Subdevice } from "./Subdevice.js";
 export { default as MutableResource } from "./MutableResource.js";
 export { default as ResourceChangeNotifier } from "./ResourceChangeNotifier.js";
 export { buildSubdevicePublicId, SUBDEVICE_ID_SEP } from "./subdeviceId.js";
+export {
+  EXECUTE_ON,
+  ON_UNAVAILABLE,
+  isSpecialExecuteOn,
+  isConnectionIdTarget,
+  validateExecuteOn,
+  validateOnUnavailable,
+  buildActionRef,
+  parseActionRef,
+  resolveNodeExecTarget,
+} from "./execTarget.js";
