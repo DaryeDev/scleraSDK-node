@@ -1,6 +1,7 @@
 import MutableResource from "./MutableResource.js";
 import { requireResourceId, parseResourceCtorArg } from "./resourceId.js";
 import EnumValue, { isEnumPrimitive } from "./EnumValue.js";
+import { assertValidVisibleWhenCondition } from "./visibleWhen.js";
 
 const VALID_TYPES = ["string", "number", "boolean", "object", "array", "enum"];
 const OPTION_TYPES = new Set(["string", "number", "boolean", "enum"]);
@@ -26,6 +27,8 @@ export default class ActionParameter extends MutableResource {
   #showAsOption;
   /** @type {boolean | undefined} */
   #showAsSocket;
+  /** @type {object | undefined} */
+  #visibleWhen;
 
   /**
    * @param {string | object} arg  Parameter id, or options object with required `id`.
@@ -42,6 +45,7 @@ export default class ActionParameter extends MutableResource {
       enumValues,
       showAsOption,
       showAsSocket,
+      visibleWhen,
     } = parseResourceCtorArg(arg);
     this.#id = requireResourceId(id, "ActionParameter");
     if (name) this.setName(name, { sync: false });
@@ -52,6 +56,7 @@ export default class ActionParameter extends MutableResource {
     if (enumValues !== undefined) this.setEnumValues(enumValues, { sync: false });
     if (showAsOption !== undefined) this.setShowAsOption(showAsOption, { sync: false });
     if (showAsSocket !== undefined) this.setShowAsSocket(showAsSocket, { sync: false });
+    if (visibleWhen !== undefined) this.setVisibleWhen(visibleWhen, { sync: false });
   }
 
   setName(name, opts) {
@@ -124,6 +129,25 @@ export default class ActionParameter extends MutableResource {
     return this;
   }
 
+  /**
+   * Declarative visibility condition, evaluated by the flow editor against
+   * the current values of the *other* parameters of the same action.
+   * Replaces the old "one action, several behaviors" mutation pattern; see
+   * docs/PLAN_MIGRACION_PLUGINS_V2.md §1.2.
+   * @param {object} visibleWhen  `{ param, op, value? }` or a combinator (`all`/`any`/`not`).
+   * @param {object} [opts]
+   */
+  setVisibleWhen(visibleWhen, opts) {
+    assertValidVisibleWhenCondition(visibleWhen, `ActionParameter "${this.#id}"`);
+    this.#visibleWhen = visibleWhen;
+    this._notifyChange(opts);
+    return this;
+  }
+
+  get visibleWhen() {
+    return this.#visibleWhen;
+  }
+
   #assertUniqueEnumValues() {
     const values = this.#enumValues.map((item) => item.value);
     const seenValues = new Set();
@@ -194,6 +218,7 @@ export default class ActionParameter extends MutableResource {
     if (this.#enumValues !== undefined) {
       obj.enumValues = this.#enumValues.map((item) => item.export());
     }
+    if (this.#visibleWhen !== undefined) obj.visibleWhen = this.#visibleWhen;
 
     return obj;
   }
