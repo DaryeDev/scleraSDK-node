@@ -36,6 +36,10 @@ export default class ScleraClient extends ResourceHost {
   #syncTimers = new Map();
   /** @type {string | undefined} */
   #color;
+  #unauthorized = false;
+  #unauthorizedMessage = null;
+  #degraded = false;
+  #degradedMessage = null;
   /** @type {WeakMap<import('./Action.js').default, () => void>} */
   #catalogActionUnsubs = new WeakMap();
   /** @type {WeakMap<import('./Event.js').default, () => void>} */
@@ -218,6 +222,83 @@ export default class ScleraClient extends ResourceHost {
     this.#scheduleResourceSync("connectionProfile", opts);
   }
 
+  /**
+   * Live-set the "unauthorized" status for this connection itself (as
+   * opposed to one of its subdevices). Only meaningful while connected; the
+   * server hides status while disconnected regardless of this flag. If both
+   * unauthorized and degraded are set, unauthorized wins.
+   * @param {boolean} value
+   * @param {{ message?: string, sync?: boolean }} [opts]
+   */
+  setUnauthorized(value, opts = {}) {
+    this.#unauthorized = !!value;
+    this.#unauthorizedMessage = this.#unauthorized ? (opts?.message ?? null) : null;
+    this.scheduleConnectionStatusSync(opts);
+    return this;
+  }
+
+  /**
+   * Live-set the "degraded" status for this connection itself.
+   * @param {boolean} value
+   * @param {{ message?: string, sync?: boolean }} [opts]
+   */
+  setDegraded(value, opts = {}) {
+    this.#degraded = !!value;
+    this.#degradedMessage = this.#degraded ? (opts?.message ?? null) : null;
+    this.scheduleConnectionStatusSync(opts);
+    return this;
+  }
+
+  get unauthorized() {
+    return this.#unauthorized;
+  }
+
+  get degraded() {
+    return this.#degraded;
+  }
+
+  /** @returns {string|null} "unauthorized" | "degraded" | null (unauthorized wins if both are set) */
+  get statusValue() {
+    if (this.#unauthorized) return "unauthorized";
+    if (this.#degraded) return "degraded";
+    return null;
+  }
+
+  get statusMessage() {
+    if (this.#unauthorized) return this.#unauthorizedMessage;
+    if (this.#degraded) return this.#degradedMessage;
+    return null;
+  }
+
+  /** @returns {"disconnected"|"unauthorized"|"degraded"|"connected"} Computed 4-state status. */
+  get status() {
+    if (!this.connected) return "disconnected";
+    return this.statusValue ?? "connected";
+  }
+
+  /** @returns {boolean} Live transport connectivity (true once the WS session is active). */
+  get connected() {
+    return this.#sessionActive && this.#ws?.readyState === 1;
+  }
+
+  scheduleConnectionStatusSync(opts) {
+    this.#scheduleResourceSync("connectionStatus", opts);
+  }
+
+  /**
+   * @param {{ sync?: boolean }} [opts]
+   */
+  async registerConnectionStatus(opts = {}) {
+    const { sync } = normalizeRegisterOpts(opts);
+    const status = this.statusValue;
+    const statusMessage = this.statusMessage;
+    if (!sync) return { ok: true, localOnly: true, status, statusMessage };
+    return await this.sendAndWaitForResponse("connection/setStatus", {
+      status,
+      statusMessage,
+    });
+  }
+
   #scheduleResourceSync(resource, opts) {
     const { sync, replace } = normalizeRegisterOpts(opts);
     if (!sync || !this.#sessionActive || this.#ws?.readyState !== 1) return;
@@ -252,6 +333,9 @@ export default class ScleraClient extends ResourceHost {
         break;
       case "connectionProfile":
         await this.registerConnectionProfile({ sync: true });
+        break;
+      case "connectionStatus":
+        await this.registerConnectionStatus({ sync: true });
         break;
       default:
         break;
@@ -345,6 +429,10 @@ export default class ScleraClient extends ResourceHost {
 
     if (this.#color !== undefined) {
       await this.registerConnectionProfile({ sync: true });
+    }
+
+    if (this.statusValue !== null) {
+      await this.registerConnectionStatus({ sync: true });
     }
   }
 

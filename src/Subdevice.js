@@ -13,6 +13,10 @@ export default class Subdevice extends MutableResource {
   #color;
   #metadata;
   #connected = true;
+  #unauthorized = false;
+  #unauthorizedMessage = null;
+  #degraded = false;
+  #degradedMessage = null;
   /** @type {Map<string, Action>} */
   #actions = new Map();
   /** @type {Map<string, Event>} */
@@ -192,6 +196,34 @@ export default class Subdevice extends MutableResource {
     return this;
   }
 
+  /**
+   * Live-set the "unauthorized" status (e.g. expired/revoked credentials).
+   * Only meaningful while `connected` is true; the server hides status while
+   * disconnected regardless of this flag. If both unauthorized and degraded
+   * are set, unauthorized wins.
+   * @param {boolean} value
+   * @param {{ message?: string, sync?: boolean }} [opts]
+   */
+  setUnauthorized(value, opts = {}) {
+    this.#unauthorized = !!value;
+    this.#unauthorizedMessage = this.#unauthorized ? (opts?.message ?? null) : null;
+    this._notifyChange(opts);
+    return this;
+  }
+
+  /**
+   * Live-set the "degraded" status (e.g. rate limited, partial functionality).
+   * Only meaningful while `connected` is true and while not unauthorized.
+   * @param {boolean} value
+   * @param {{ message?: string, sync?: boolean }} [opts]
+   */
+  setDegraded(value, opts = {}) {
+    this.#degraded = !!value;
+    this.#degradedMessage = this.#degraded ? (opts?.message ?? null) : null;
+    this._notifyChange(opts);
+    return this;
+  }
+
   addAction(action, opts) {
     if (!(action instanceof Action)) {
       throw new Error("action must be an Action instance");
@@ -279,6 +311,33 @@ export default class Subdevice extends MutableResource {
     return this.#connected;
   }
 
+  get unauthorized() {
+    return this.#unauthorized;
+  }
+
+  get degraded() {
+    return this.#degraded;
+  }
+
+  /** @returns {string|null} "unauthorized" | "degraded" | null (unauthorized wins if both are set) */
+  get statusValue() {
+    if (this.#unauthorized) return "unauthorized";
+    if (this.#degraded) return "degraded";
+    return null;
+  }
+
+  get statusMessage() {
+    if (this.#unauthorized) return this.#unauthorizedMessage;
+    if (this.#degraded) return this.#degradedMessage;
+    return null;
+  }
+
+  /** @returns {"disconnected"|"unauthorized"|"degraded"|"connected"} Computed 4-state status. */
+  get status() {
+    if (!this.#connected) return "disconnected";
+    return this.statusValue ?? "connected";
+  }
+
   toProposed() {
     if (!this.#name) throw new Error("Subdevice requires a name");
     return {
@@ -295,6 +354,7 @@ export default class Subdevice extends MutableResource {
       externalId: this.externalId,
       name: this.#name,
       connected: this.#connected,
+      ...(this.statusValue && { status: this.statusValue, statusMessage: this.statusMessage }),
       ...(this.#deviceType && { deviceType: this.#deviceType }),
       ...(this.#color !== undefined && { color: this.#color }),
       ...(this.#metadata !== undefined && { metadata: this.#metadata }),

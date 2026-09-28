@@ -7,6 +7,9 @@
   "exports": {
     ".": "./src/index.js"
   },
+  "scripts": {
+    "test": "node --test \"test/*.test.js\""
+  },
   "dependencies": {
     "ajv": "^8.20.0",
     "ws": "^8.19.0"
