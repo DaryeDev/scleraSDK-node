@@ -13,3 +13,4 @@ export { default as Subdevice } from "./Subdevice.js";
 export { default as MutableResource } from "./MutableResource.js";
 export { default as ResourceChangeNotifier } from "./ResourceChangeNotifier.js";
 export { buildSubdevicePublicId, SUBDEVICE_ID_SEP } from "./subdeviceId.js";
+export { ANNOTATION_DEFAULTS, ANNOTATION_KEYS, resolveAnnotations } from "./annotations.js";
