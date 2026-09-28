@@ -8,6 +8,7 @@ import { buildSubdevicePublicId } from "./subdeviceId.js";
 import { normalizeRegisterOpts } from "./syncOptions.js";
 import { normalizeOptionalColor } from "./color.js";
 import { matchEventParameters } from "./eventParameterMatch.js";
+import { assertValidDefaultLocale } from "./i18n.js";
 
 const SYNC_DEBOUNCE_MS = 50;
 
@@ -40,6 +41,8 @@ export default class ScleraClient extends ResourceHost {
   #unauthorizedMessage = null;
   #degraded = false;
   #degradedMessage = null;
+  /** @type {string | undefined} */
+  #defaultLocale;
   /** @type {WeakMap<import('./Action.js').default, () => void>} */
   #catalogActionUnsubs = new WeakMap();
   /** @type {WeakMap<import('./Event.js').default, () => void>} */
@@ -218,6 +221,23 @@ export default class ScleraClient extends ResourceHost {
     return this;
   }
 
+  /**
+   * Locale that this connection's statusMessage base text is written in.
+   * Purely documentary (used by the editor's fallback chain); defaults to
+   * "en" server-side when omitted.
+   * @param {string} locale
+   */
+  setDefaultLocale(locale) {
+    assertValidDefaultLocale(locale, "Connection");
+    this.#defaultLocale = locale;
+    this.scheduleConnectionProfileSync();
+    return this;
+  }
+
+  get defaultLocale() {
+    return this.#defaultLocale;
+  }
+
   scheduleConnectionProfileSync(opts) {
     this.#scheduleResourceSync("connectionProfile", opts);
   }
@@ -228,7 +248,8 @@ export default class ScleraClient extends ResourceHost {
    * server hides status while disconnected regardless of this flag. If both
    * unauthorized and degraded are set, unauthorized wins.
    * @param {boolean} value
-   * @param {{ message?: string, sync?: boolean }} [opts]
+   * @param {{ message?: string | Record<string, string>, sync?: boolean }} [opts]
+   *   `message` may be a plain string or a `{ locale: string }` map.
    */
   setUnauthorized(value, opts = {}) {
     this.#unauthorized = !!value;
@@ -240,7 +261,8 @@ export default class ScleraClient extends ResourceHost {
   /**
    * Live-set the "degraded" status for this connection itself.
    * @param {boolean} value
-   * @param {{ message?: string, sync?: boolean }} [opts]
+   * @param {{ message?: string | Record<string, string>, sync?: boolean }} [opts]
+   *   `message` may be a plain string or a `{ locale: string }` map.
    */
   setDegraded(value, opts = {}) {
     this.#degraded = !!value;
@@ -427,7 +449,7 @@ export default class ScleraClient extends ResourceHost {
       await this.registerSubdevices(undefined, { replace: true, sync: true });
     }
 
-    if (this.#color !== undefined) {
+    if (this.#color !== undefined || this.#defaultLocale !== undefined) {
       await this.registerConnectionProfile({ sync: true });
     }
 
@@ -441,12 +463,13 @@ export default class ScleraClient extends ResourceHost {
    */
   async registerConnectionProfile(opts = {}) {
     const { sync } = normalizeRegisterOpts(opts);
-    if (this.#color === undefined) {
-      return { ok: true, localOnly: true, color: null };
+    if (this.#color === undefined && this.#defaultLocale === undefined) {
+      return { ok: true, localOnly: true, color: null, defaultLocale: null };
     }
-    if (!sync) return { ok: true, localOnly: true, color: this.#color };
+    if (!sync) return { ok: true, localOnly: true, color: this.#color, defaultLocale: this.#defaultLocale };
     return await this.sendAndWaitForResponse("connection/setProfile", {
       color: this.#color,
+      defaultLocale: this.#defaultLocale,
     });
   }
 
