@@ -22,3 +22,4 @@ export {
   collectVisibleWhenParamRefs,
   assertValidVisibleWhenReferences,
 } from "./visibleWhen.js";
+export { ANNOTATION_DEFAULTS, ANNOTATION_KEYS, resolveAnnotations } from "./annotations.js";
