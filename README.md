@@ -64,6 +64,56 @@ changes) and propagate to the flow editor in real time. Backward compatible:
 `connected` stays a plain boolean everywhere; `status`/`statusMessage` are
 additive and omitted from `export()` until you actually set them.
 
+`statusMessage` may also be a per-locale map instead of a plain string — see
+the i18n section below.
+
+## i18n (multi-language catalogs)
+
+`Action`, `Event` and `Subdevice` all export an optional `i18n` annex
+alongside their base `name`/`description`/parameter/output/enum text, so
+someone editing flows in Spanish sees Spanish labels even though your code
+is written with English base text. Full wire format and the editor's
+fallback chain: `docs-drafts/i18n-catalogs.md` in the server repo.
+
+```javascript
+action
+  .setDefaultLocale("en") // optional; documents what locale name/description/... are written in
+  .setTranslations({
+    es: {
+      name: "Cambiar escena",
+      description: "Cambia a una escena guardada de OBS",
+      parameters: { sceneId: { name: "Escena" } },
+      outputs: { ok: { name: "Resultado" } },
+      enumValues: { sceneId: { intro: "Intro", brb: "Ausente" } },
+    },
+  })
+  .addTranslation("pt-BR", { name: "Trocar cena" }); // merges into the existing i18n, doesn't replace it
+```
+
+Same two methods (`setTranslations`/`addTranslation`) plus `setDefaultLocale`
+exist on `Event` (translation groups: `name`, `description`, `payload`,
+`parameters`, `enumValues`) and `Subdevice` (translation groups: `name`,
+`description` only — a subdevice's actions/events carry their own `i18n`).
+Every id referenced under `parameters`/`outputs`/`payload`/`enumValues` is
+validated against the resource's actual parameters/outputs at call time —
+translating a parameter id that doesn't exist throws immediately.
+
+`statusMessage` accepts a per-locale map anywhere it accepts a string:
+
+```javascript
+subdevice.setUnauthorized(true, {
+  message: { en: "Token expired", es: "Token caducado" },
+});
+```
+
+The connection itself (`Device`/`ScleraClient`, `App`) only gets
+`setDefaultLocale(locale)` — there's no `i18n` annex to set on the profile,
+just the locale that its own `statusMessage` base text is written in.
+
+Backward compatible: `i18n`/`defaultLocale` are both optional and omitted
+from `export()` until set; a resource with neither present validates and
+renders exactly as before this feature.
+
 ## outputSchema (JSON Schema draft-07)
 
 `EventPayloadVariable` and `ActionOutput` accept an optional JSON Schema via `setOutputSchema()`. The flow editor uses it to expand object keys. The SDK validates values **before** they leave the client.

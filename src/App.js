@@ -4,6 +4,7 @@ import Subdevice from "./Subdevice.js";
 import { buildSubdevicePublicId } from "./subdeviceId.js";
 import { normalizeOptionalColor } from "./color.js";
 import { matchEventParameters } from "./eventParameterMatch.js";
+import { assertValidDefaultLocale } from "./i18n.js";
 
 export default class App extends ResourceHost {
   #clientId;
@@ -13,6 +14,8 @@ export default class App extends ResourceHost {
   #webhookSigningSecret;
   #isHub;
   #color;
+  /** @type {string | undefined} */
+  #defaultLocale;
   #appInternalId = null;
   /** @type {Map<string, Map<string, import('./Action.js').default>>} */
   #subdeviceActions = new Map();
@@ -111,14 +114,29 @@ export default class App extends ResourceHost {
     return this;
   }
 
+  /**
+   * Locale that this connection's statusMessage base text is written in.
+   * Purely documentary; defaults to "en" server-side when omitted.
+   * @param {string} locale
+   */
+  setDefaultLocale(locale) {
+    assertValidDefaultLocale(locale, "App");
+    this.#defaultLocale = locale;
+    return this;
+  }
+
+  get defaultLocale() {
+    return this.#defaultLocale;
+  }
+
   async registerConnectionProfile() {
-    if (this.#color === undefined) {
-      return { success: true, color: null };
+    if (this.#color === undefined && this.#defaultLocale === undefined) {
+      return { success: true, color: null, defaultLocale: null };
     }
     const response = await fetch(this.#rest(`/oauth/apps/${this.#clientId}/profile`), {
       method: "PUT",
       headers: { Authorization: this.#basicAuth(), "Content-Type": "application/json" },
-      body: JSON.stringify({ color: this.#color }),
+      body: JSON.stringify({ color: this.#color, defaultLocale: this.#defaultLocale }),
     });
     if (!response.ok) throw new Error(`Failed to register connection profile: ${await response.text()}`);
     return response.json();

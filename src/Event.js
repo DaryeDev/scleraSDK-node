@@ -4,6 +4,7 @@ import MutableResource from "./MutableResource.js";
 import { requireResourceId, parseResourceCtorArg } from "./resourceId.js";
 import { matchValuesFromPayload } from "./eventParameterMatch.js";
 import { validateEventPayload } from "./outputSchemaValidate.js";
+import { assertValidDefaultLocale, assertValidTranslation, assertWithinLimits } from "./i18n.js";
 
 /** @typedef {string | null} EmitterKey  null = hub client (omit emitterId on wire) */
 
@@ -14,6 +15,9 @@ export default class Event extends MutableResource {
   #autoAccept = true;
   #payloadVariables = [];
   #parameters = [];
+  #defaultLocale;
+  /** @type {Record<string, object>} */
+  #i18n = {};
   #client = null;
   /** @type {Set<EmitterKey>} */
   #registeredEmitters = new Set();
@@ -131,6 +135,72 @@ export default class Event extends MutableResource {
 
   get parameters() {
     return [...this.#parameters];
+  }
+
+  /**
+   * Locale that name/description/payload/parameter/enum base text is
+   * written in. Purely documentary; defaults to "en" server-side when
+   * omitted.
+   * @param {string} locale
+   * @param {object} [opts]
+   */
+  setDefaultLocale(locale, opts) {
+    assertValidDefaultLocale(locale, `Event "${this.#id}"`);
+    this.#defaultLocale = locale;
+    this._notifyChange(opts);
+    return this;
+  }
+
+  #allowedIds() {
+    return {
+      payloadIds: new Set(this.#payloadVariables.map((v) => v.id)),
+      parameterIds: new Set(this.#parameters.map((p) => p.id)),
+      enumParameterIds: new Set(this.#parameters.filter((p) => p.type === "enum").map((p) => p.id)),
+    };
+  }
+
+  /**
+   * Replace the whole i18n annex with `translations` (keyed by locale).
+   * Validates that every referenced payload/parameter/enum id actually
+   * exists on this event.
+   * @param {Record<string, object>} translations
+   * @param {object} [opts]
+   */
+  setTranslations(translations, opts) {
+    if (!translations || typeof translations !== "object" || Array.isArray(translations)) {
+      throw new Error(`Event "${this.#id}": translations must be an object keyed by locale`);
+    }
+    const ids = this.#allowedIds();
+    const next = {};
+    for (const [locale, translation] of Object.entries(translations)) {
+      next[locale] = assertValidTranslation(locale, translation, {
+        ...ids,
+        allowedGroups: ["name", "description", "payload", "parameters", "enumValues"],
+        label: `Event "${this.#id}"`,
+      });
+    }
+    assertWithinLimits(next, `Event "${this.#id}"`);
+    this.#i18n = next;
+    this._notifyChange(opts);
+    return this;
+  }
+
+  /**
+   * Add/replace a single locale's translation without touching the others.
+   * @param {string} locale
+   * @param {object} translation
+   * @param {object} [opts]
+   */
+  addTranslation(locale, translation, opts) {
+    return this.setTranslations({ ...this.#i18n, [locale]: translation }, opts);
+  }
+
+  get defaultLocale() {
+    return this.#defaultLocale;
+  }
+
+  get i18n() {
+    return this.#i18n;
   }
 
   /**
@@ -311,6 +381,8 @@ export default class Event extends MutableResource {
       autoAccept: this.#autoAccept,
       ...(schema && { payloadSchema: schema }),
       ...(parameterSchema && { parameterSchema }),
+      ...(this.#defaultLocale !== undefined && { defaultLocale: this.#defaultLocale }),
+      ...(Object.keys(this.#i18n).length > 0 && { i18n: this.#i18n }),
     };
   }
 }
