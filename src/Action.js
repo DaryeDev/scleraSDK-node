@@ -5,6 +5,7 @@ import { requireResourceId, parseResourceCtorArg } from "./resourceId.js";
 import { normalizeOptionalColor } from "./color.js";
 import { validateActionResult } from "./outputSchemaValidate.js";
 import { assertValidDefaultLocale, assertValidTranslation, assertWithinLimits } from "./i18n.js";
+import { assertValidVisibleWhenReferences } from "./visibleWhen.js";
 
 /**
  * @typedef {object} ActionExecContext
@@ -333,7 +334,10 @@ export default class Action extends MutableResource {
 
     if (this.#description !== undefined) obj.description = this.#description;
     if (this.#color !== undefined) obj.color = this.#color;
-    if (this.#parameters.length > 0) obj.parameters = this.#parameters.map((p) => p.export());
+    if (this.#parameters.length > 0) {
+      obj.parameters = this.#parameters.map((p) => p.export());
+      assertValidVisibleWhenReferences(obj.parameters, `Action "${this.#id}"`);
+    }
     if (this.#outputs.length > 0) obj.outputs = this.#outputs.map((o) => o.export());
     if (this.#defaultLocale !== undefined) obj.defaultLocale = this.#defaultLocale;
     if (Object.keys(this.#i18n).length > 0) obj.i18n = this.#i18n;
