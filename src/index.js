@@ -23,3 +23,14 @@ export {
   assertValidVisibleWhenReferences,
 } from "./visibleWhen.js";
 export { ANNOTATION_DEFAULTS, ANNOTATION_KEYS, resolveAnnotations } from "./annotations.js";
+export {
+  EXECUTE_ON,
+  ON_UNAVAILABLE,
+  isSpecialExecuteOn,
+  isConnectionIdTarget,
+  validateExecuteOn,
+  validateOnUnavailable,
+  buildActionRef,
+  parseActionRef,
+  resolveNodeExecTarget,
+} from "./execTarget.js";
