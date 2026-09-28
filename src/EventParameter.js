@@ -11,13 +11,14 @@ export default class EventParameter extends MutableResource {
   #required = false;
   #defaultValue;
   #enumValues;
+  #optionsFrom;
 
   /**
    * @param {string | object} arg  Parameter id, or options object with required `id`.
    */
   constructor(arg) {
     super();
-    const { id, name, description, type, required, defaultValue, enumValues } =
+    const { id, name, description, type, required, defaultValue, enumValues, optionsFrom } =
       parseResourceCtorArg(arg);
     this.#id = requireResourceId(id, "EventParameter");
     if (name) this.setName(name, { sync: false });
@@ -26,6 +27,7 @@ export default class EventParameter extends MutableResource {
     if (required !== undefined) this.setRequired(required, { sync: false });
     if (defaultValue !== undefined) this.setDefaultValue(defaultValue, { sync: false });
     if (enumValues !== undefined) this.setEnumValues(enumValues, { sync: false });
+    if (optionsFrom !== undefined) this.setOptionsFrom(optionsFrom, { sync: false });
   }
 
   setName(name, opts) {
@@ -79,6 +81,40 @@ export default class EventParameter extends MutableResource {
     return this;
   }
 
+  /**
+   * Populate this (enum) parameter's dropdown from a catalog Collection
+   * instead of (or in addition to) a fixed enumValues list (plan v2.3 §1.3).
+   * @param {{ collection: string, value: string, label: string, filter?: object[], strict?: boolean }} optionsFrom
+   * @param {object} [opts]
+   */
+  setOptionsFrom(optionsFrom, opts) {
+    if (!optionsFrom || typeof optionsFrom !== "object" || Array.isArray(optionsFrom)) {
+      throw new Error("EventParameter optionsFrom must be an object");
+    }
+    const { collection, value, label, filter, strict } = optionsFrom;
+    if (typeof collection !== "string" || collection.length === 0) {
+      throw new Error(`EventParameter "${this.#id}": optionsFrom.collection must be a non-empty string`);
+    }
+    if (typeof value !== "string" || value.length === 0) {
+      throw new Error(`EventParameter "${this.#id}": optionsFrom.value must be a non-empty string`);
+    }
+    if (typeof label !== "string" || label.length === 0) {
+      throw new Error(`EventParameter "${this.#id}": optionsFrom.label must be a non-empty string`);
+    }
+    if (filter !== undefined && !Array.isArray(filter)) {
+      throw new Error(`EventParameter "${this.#id}": optionsFrom.filter must be an array`);
+    }
+    this.#optionsFrom = {
+      collection,
+      value,
+      label,
+      ...(filter !== undefined && { filter }),
+      ...(strict !== undefined && { strict: !!strict }),
+    };
+    this._notifyChange(opts);
+    return this;
+  }
+
   get id() {
     return this.#id;
   }
@@ -89,8 +125,12 @@ export default class EventParameter extends MutableResource {
 
   export() {
     if (!this.#name) throw new Error("EventParameter requires a name");
-    if (this.#type === "enum" && (!this.#enumValues || this.#enumValues.length === 0)) {
-      throw new Error(`EventParameter "${this.#id}" of type enum requires enumValues`);
+    const hasEnumValues = this.#enumValues && this.#enumValues.length > 0;
+    if (this.#type === "enum" && !hasEnumValues && !this.#optionsFrom) {
+      throw new Error(`EventParameter "${this.#id}" of type enum requires enumValues or optionsFrom`);
+    }
+    if (this.#optionsFrom && this.#type !== "enum") {
+      throw new Error(`EventParameter "${this.#id}" has optionsFrom but is not of type enum`);
     }
 
     const obj = {
@@ -102,6 +142,7 @@ export default class EventParameter extends MutableResource {
     if (this.#required) obj.required = true;
     if (this.#defaultValue !== undefined) obj.default = this.#defaultValue;
     if (this.#enumValues !== undefined) obj.enumValues = this.#enumValues;
+    if (this.#optionsFrom !== undefined) obj.optionsFrom = this.#optionsFrom;
 
     return obj;
   }

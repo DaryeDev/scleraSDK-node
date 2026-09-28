@@ -5,6 +5,8 @@ import { requireResourceId, parseResourceCtorArg } from "./resourceId.js";
 import { normalizeOptionalColor } from "./color.js";
 import { validateActionResult } from "./outputSchemaValidate.js";
 import { assertValidDefaultLocale, assertValidTranslation, assertWithinLimits } from "./i18n.js";
+import { assertValidVisibleWhenReferences } from "./visibleWhen.js";
+import { assertValidAnnotations, resolveAnnotations } from "./annotations.js";
 
 /**
  * @typedef {object} ActionExecContext
@@ -47,6 +49,8 @@ export default class Action extends MutableResource {
   #outputs = [];
   #exec;
   #defaultLocale;
+  /** @type {Record<string, boolean> | undefined} */
+  #annotations;
   /** @type {Record<string, object>} */
   #i18n = {};
   /** @type {Map<ActionParameter, () => void>} */
@@ -60,11 +64,13 @@ export default class Action extends MutableResource {
    */
   constructor(arg) {
     super();
-    const { id, name, description, parameters = [], outputs = [], exec, color } = parseResourceCtorArg(arg);
+    const { id, name, description, parameters = [], outputs = [], exec, color, annotations } =
+      parseResourceCtorArg(arg);
     this.#id = requireResourceId(id, "Action");
     if (name) this.setName(name, { sync: false });
     if (description !== undefined) this.setDescription(description, { sync: false });
     if (color !== undefined) this.setColor(color, { sync: false });
+    if (annotations !== undefined) this.setAnnotations(annotations, { sync: false });
     if (exec) this.setExec(exec);
     for (const p of parameters) this.addParameter(p, { sync: false });
     for (const o of outputs) this.addOutput(o, { sync: false });
@@ -120,6 +126,30 @@ export default class Action extends MutableResource {
     this.#color = normalizeOptionalColor(color);
     this._notifyChange(opts);
     return this;
+  }
+
+  /**
+   * MCP-style hints (`readOnly` / `destructive` / `idempotent`), all
+   * optional. Missing keys are exported as-is (not filled in) — consumers
+   * apply {@link resolveAnnotations}'s conservative defaults themselves.
+   * See docs/PLAN_MIGRACION_PLUGINS_V2.md §1.6.
+   * @param {{ readOnly?: boolean, destructive?: boolean, idempotent?: boolean }} annotations
+   * @param {object} [opts]
+   */
+  setAnnotations(annotations, opts) {
+    this.#annotations = assertValidAnnotations(annotations, `Action "${this.#id}"`);
+    this._notifyChange(opts);
+    return this;
+  }
+
+  /** Raw annotations as declared (only the keys that were set), or `undefined`. */
+  get annotations() {
+    return this.#annotations ? { ...this.#annotations } : undefined;
+  }
+
+  /** Annotations merged with the conservative defaults. */
+  get effectiveAnnotations() {
+    return resolveAnnotations(this.#annotations);
   }
 
   /**
@@ -333,7 +363,11 @@ export default class Action extends MutableResource {
 
     if (this.#description !== undefined) obj.description = this.#description;
     if (this.#color !== undefined) obj.color = this.#color;
-    if (this.#parameters.length > 0) obj.parameters = this.#parameters.map((p) => p.export());
+    if (this.#annotations !== undefined) obj.annotations = { ...this.#annotations };
+    if (this.#parameters.length > 0) {
+      obj.parameters = this.#parameters.map((p) => p.export());
+      assertValidVisibleWhenReferences(obj.parameters, `Action "${this.#id}"`);
+    }
     if (this.#outputs.length > 0) obj.outputs = this.#outputs.map((o) => o.export());
     if (this.#defaultLocale !== undefined) obj.defaultLocale = this.#defaultLocale;
     if (Object.keys(this.#i18n).length > 0) obj.i18n = this.#i18n;
