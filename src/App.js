@@ -143,7 +143,8 @@ export default class App extends ResourceHost {
   }
 
   #emitterChannelKey(emitterId, eventId) {
-    return emitterId ? `${emitterId}:${eventId}` : eventId;
+    const resolved = this.#normalizeEmitterKey(emitterId);
+    return resolved ? `${resolved}:${eventId}` : eventId;
   }
 
   #prepareSubdeviceEventKeys(subdevices) {
@@ -372,6 +373,8 @@ export default class App extends ResourceHost {
   #normalizeEmitterKey(emitterId) {
     if (emitterId == null || emitterId === "") return null;
     if (this.#appInternalId && emitterId === this.#appInternalId) return null;
+    if (this.#clientId && emitterId === this.#clientId) return null;
+    if (!String(emitterId).includes(":")) return null;
     return emitterId;
   }
 
@@ -532,7 +535,10 @@ export default class App extends ResourceHost {
   async #sendAuthGrant(listenerClientId, listenerPubKey, eventId, subscriptionId = null, emitterId = null) {
     const key = this.#emitterChannelKey(emitterId ?? null, eventId);
     const channelKey = this.#emitterChannelKeys.get(key);
-    if (!channelKey) return;
+    if (!channelKey) {
+      console.error(`[sclera/app] No emitter channel key for ${key} — cannot send authGrant`);
+      return;
+    }
 
     const ephemeral = crypto.createECDH("prime256v1");
     ephemeral.generateKeys();
