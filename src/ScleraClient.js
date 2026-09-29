@@ -166,7 +166,8 @@ export default class ScleraClient extends ResourceHost {
   }
 
   #emitterChannelKey(emitterId, eventId) {
-    return emitterId ? `${emitterId}:${eventId}` : eventId;
+    const resolved = this.#normalizeEmitterKey(emitterId);
+    return resolved ? `${resolved}:${eventId}` : eventId;
   }
 
   async #ensureHubClientId() {
@@ -618,6 +619,7 @@ export default class ScleraClient extends ResourceHost {
     }
     const list = this.getEvents();
 
+    await this.#ensureHubClientId();
     for (const event of list) {
       const key = this.#emitterChannelKey(null, event.id);
       if (!this.#emitterChannelKeys.has(key)) {
@@ -733,8 +735,11 @@ export default class ScleraClient extends ResourceHost {
 
   #normalizeEmitterKey(emitterId) {
     if (emitterId == null || emitterId === "") return null;
-    // Hub self-emits: wire may send the hub client UUID; local emit uses null
+    // Hub self-emits: wire may send the hub client UUID; local emit uses null.
+    // Subdevice public ids are parentId:externalId (they contain ":").
     if (this.#hubClientId && emitterId === this.#hubClientId) return null;
+    if (this.#config?.deviceId && emitterId === this.#config.deviceId) return null;
+    if (!String(emitterId).includes(":")) return null;
     return emitterId;
   }
 
@@ -782,9 +787,13 @@ export default class ScleraClient extends ResourceHost {
   }
 
   async _sendAuthGrant(listenerClientId, listenerPubKey, eventId, subscriptionId = null, emitterId = null) {
+    await this.#ensureHubClientId();
     const key = this.#emitterChannelKey(emitterId ?? null, eventId);
     const channelKey = this.#emitterChannelKeys.get(key);
-    if (!channelKey) return;
+    if (!channelKey) {
+      console.error(`[sclera] No emitter channel key for ${key} — cannot send authGrant`);
+      return;
+    }
 
     const ephemeral = crypto.createECDH("prime256v1");
     ephemeral.generateKeys();

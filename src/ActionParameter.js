@@ -1,6 +1,7 @@
 import MutableResource from "./MutableResource.js";
 import { requireResourceId, parseResourceCtorArg } from "./resourceId.js";
 import EnumValue, { isEnumPrimitive } from "./EnumValue.js";
+import { assertValidVisibleWhenCondition } from "./visibleWhen.js";
 
 const VALID_TYPES = ["string", "number", "boolean", "object", "array", "enum"];
 const OPTION_TYPES = new Set(["string", "number", "boolean", "enum"]);
@@ -26,6 +27,10 @@ export default class ActionParameter extends MutableResource {
   #showAsOption;
   /** @type {boolean | undefined} */
   #showAsSocket;
+  /** @type {object | undefined} */
+  #optionsFrom;
+  /** @type {object | undefined} */
+  #visibleWhen;
 
   /**
    * @param {string | object} arg  Parameter id, or options object with required `id`.
@@ -42,6 +47,8 @@ export default class ActionParameter extends MutableResource {
       enumValues,
       showAsOption,
       showAsSocket,
+      optionsFrom,
+      visibleWhen,
     } = parseResourceCtorArg(arg);
     this.#id = requireResourceId(id, "ActionParameter");
     if (name) this.setName(name, { sync: false });
@@ -52,6 +59,8 @@ export default class ActionParameter extends MutableResource {
     if (enumValues !== undefined) this.setEnumValues(enumValues, { sync: false });
     if (showAsOption !== undefined) this.setShowAsOption(showAsOption, { sync: false });
     if (showAsSocket !== undefined) this.setShowAsSocket(showAsSocket, { sync: false });
+    if (optionsFrom !== undefined) this.setOptionsFrom(optionsFrom, { sync: false });
+    if (visibleWhen !== undefined) this.setVisibleWhen(visibleWhen, { sync: false });
   }
 
   setName(name, opts) {
@@ -124,6 +133,60 @@ export default class ActionParameter extends MutableResource {
     return this;
   }
 
+  /**
+   * Populate this (enum) parameter's dropdown from a catalog Collection
+   * instead of (or in addition to) a fixed enumValues list (plan v2.3
+   * §1.3). Only valid when type is "enum".
+   * @param {{ collection: string, value: string, label: string, filter?: object[], strict?: boolean }} optionsFrom
+   * @param {object} [opts]
+   */
+  setOptionsFrom(optionsFrom, opts) {
+    if (!optionsFrom || typeof optionsFrom !== "object" || Array.isArray(optionsFrom)) {
+      throw new Error("ActionParameter optionsFrom must be an object");
+    }
+    const { collection, value, label, filter, strict } = optionsFrom;
+    if (typeof collection !== "string" || collection.length === 0) {
+      throw new Error(`ActionParameter "${this.#id}": optionsFrom.collection must be a non-empty string`);
+    }
+    if (typeof value !== "string" || value.length === 0) {
+      throw new Error(`ActionParameter "${this.#id}": optionsFrom.value must be a non-empty string`);
+    }
+    if (typeof label !== "string" || label.length === 0) {
+      throw new Error(`ActionParameter "${this.#id}": optionsFrom.label must be a non-empty string`);
+    }
+    if (filter !== undefined && !Array.isArray(filter)) {
+      throw new Error(`ActionParameter "${this.#id}": optionsFrom.filter must be an array`);
+    }
+    this.#optionsFrom = {
+      collection,
+      value,
+      label,
+      ...(filter !== undefined && { filter }),
+      ...(strict !== undefined && { strict: !!strict }),
+    };
+    this._notifyChange(opts);
+    return this;
+  }
+
+  /**
+   * Declarative visibility condition, evaluated by the flow editor against
+   * the current values of the *other* parameters of the same action.
+   * Replaces the old "one action, several behaviors" mutation pattern; see
+   * docs/PLAN_MIGRACION_PLUGINS_V2.md §1.2.
+   * @param {object} visibleWhen  `{ param, op, value? }` or a combinator (`all`/`any`/`not`).
+   * @param {object} [opts]
+   */
+  setVisibleWhen(visibleWhen, opts) {
+    assertValidVisibleWhenCondition(visibleWhen, `ActionParameter "${this.#id}"`);
+    this.#visibleWhen = visibleWhen;
+    this._notifyChange(opts);
+    return this;
+  }
+
+  get visibleWhen() {
+    return this.#visibleWhen;
+  }
+
   #assertUniqueEnumValues() {
     const values = this.#enumValues.map((item) => item.value);
     const seenValues = new Set();
@@ -164,8 +227,12 @@ export default class ActionParameter extends MutableResource {
 
   export() {
     if (!this.#name) throw new Error("ActionParameter requires a name");
-    if (this.#type === "enum" && (!this.#enumValues || this.#enumValues.length === 0)) {
-      throw new Error(`ActionParameter "${this.#id}" of type enum requires enumValues`);
+    const hasEnumValues = this.#enumValues && this.#enumValues.length > 0;
+    if (this.#type === "enum" && !hasEnumValues && !this.#optionsFrom) {
+      throw new Error(`ActionParameter "${this.#id}" of type enum requires enumValues or optionsFrom`);
+    }
+    if (this.#optionsFrom && this.#type !== "enum") {
+      throw new Error(`ActionParameter "${this.#id}" has optionsFrom but is not of type enum`);
     }
 
     const { showAsOption, showAsSocket } = this.#resolvedDisplay();
@@ -194,6 +261,10 @@ export default class ActionParameter extends MutableResource {
     if (this.#enumValues !== undefined) {
       obj.enumValues = this.#enumValues.map((item) => item.export());
     }
+    if (this.#optionsFrom !== undefined) {
+      obj.optionsFrom = this.#optionsFrom;
+    }
+    if (this.#visibleWhen !== undefined) obj.visibleWhen = this.#visibleWhen;
 
     return obj;
   }

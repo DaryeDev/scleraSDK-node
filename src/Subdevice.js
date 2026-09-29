@@ -1,6 +1,7 @@
 import crypto from "crypto";
 import Action from "./Action.js";
 import Event from "./Event.js";
+import Collection from "./Collection.js";
 import MutableResource from "./MutableResource.js";
 import { normalizeOptionalColor } from "./color.js";
 import { assertValidDefaultLocale, assertValidTranslation, assertWithinLimits } from "./i18n.js";
@@ -25,6 +26,10 @@ export default class Subdevice extends MutableResource {
   #actions = new Map();
   /** @type {Map<string, Event>} */
   #events = new Map();
+  /** @type {Map<string, Collection>} */
+  #collections = new Map();
+  /** @type {Map<Collection, () => void>} */
+  #collectionListenerUnsubs = new Map();
   /** @type {{ scheduleSubdeviceSync?: (opts?: object) => void, rekeySubdevice?: (oldKey: string, sd: Subdevice) => void, getPublicId?: () => string | null, client?: import('./ScleraClient.js').default } | null} */
   #host = null;
   /** @type {(() => void) | null} */
@@ -66,6 +71,7 @@ export default class Subdevice extends MutableResource {
     this.#hostListenerUnsub = this.onChange((opts) => host?.scheduleSubdeviceSync?.(opts));
     for (const action of this.#actions.values()) this.#bindAction(action);
     for (const event of this.#events.values()) this.#bindEvent(event);
+    for (const collection of this.#collections.values()) this.#bindCollection(collection);
     return this;
   }
 
@@ -326,6 +332,54 @@ export default class Subdevice extends MutableResource {
     return this;
   }
 
+  #bindCollection(collection) {
+    if (this.#collectionListenerUnsubs.has(collection)) return;
+    const unsub = collection.onChange((opts) => this._notifyChange(opts));
+    this.#collectionListenerUnsubs.set(collection, unsub);
+  }
+
+  #unbindCollection(collection) {
+    const unsub = this.#collectionListenerUnsubs.get(collection);
+    if (unsub) {
+      unsub();
+      this.#collectionListenerUnsubs.delete(collection);
+    }
+  }
+
+  /**
+   * Publish a catalog collection (plan v2.3 §1.3) so enum parameters on
+   * this subdevice's actions/events can reference it via `optionsFrom`.
+   * @param {Collection} collection
+   * @param {object} [opts]
+   */
+  addCollection(collection, opts) {
+    if (!(collection instanceof Collection)) {
+      throw new Error("collection must be a Collection instance");
+    }
+    this.#collections.set(collection.id, collection);
+    this.#bindCollection(collection);
+    this._notifyChange(opts);
+    return this;
+  }
+
+  removeCollection(collectionOrId, opts) {
+    const id = typeof collectionOrId === "string" ? collectionOrId : collectionOrId?.id;
+    const collection = id ? this.#collections.get(id) : undefined;
+    if (id) this.#collections.delete(id);
+    if (collection) this.#unbindCollection(collection);
+    this._notifyChange(opts);
+    return this;
+  }
+
+  getCollection(id) {
+    return this.#collections.get(id);
+  }
+
+  /** Map of collectionId -> Collection currently published by this subdevice. */
+  get collections() {
+    return new Map(this.#collections);
+  }
+
   getAction(id) {
     return this.#actions.get(id);
   }
@@ -424,6 +478,11 @@ export default class Subdevice extends MutableResource {
       ...(Object.keys(this.#i18n).length > 0 && { i18n: this.#i18n }),
       actions: this.getActionsArray().map((a) => a.export()),
       events: this.getEventsArray().map((e) => e.export()),
+      ...(this.#collections.size > 0 && {
+        collections: Object.fromEntries(
+          [...this.#collections.entries()].map(([id, c]) => [id, c.export()]),
+        ),
+      }),
     };
   }
 }
