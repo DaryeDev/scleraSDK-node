@@ -36,6 +36,34 @@ const app = new App({
 await app.registerSubdevices(subdeviceList); // also syncs profile when color is set
 ```
 
+## Device/subdevice status (4 states)
+
+Every `Device`/`App` connection and every `Subdevice` has a computed 4-state
+status: `disconnected` | `unauthorized` | `degraded` | `connected`.
+`disconnected` is transport-level and always wins; `unauthorized` /
+`degraded` are set live by your plugin and only shown while connected
+(`unauthorized` wins if both are set).
+
+```javascript
+// On the subdevice itself
+light.setUnauthorized(true, { message: "Token expired, please re-link." });
+light.unauthorized;   // true
+light.status;          // "unauthorized"
+light.setUnauthorized(false); // clears it
+
+light.setDegraded(true, { message: "Rate limited, retrying." });
+light.status;          // "degraded"
+
+// On the main connection (hub/device/app itself)
+hub.setUnauthorized(true, { message: "Hub credentials revoked." });
+hub.status;             // "unauthorized" (while hub.connected is true)
+```
+
+Both changes sync live to the server (debounced, like other catalog
+changes) and propagate to the flow editor in real time. Backward compatible:
+`connected` stays a plain boolean everywhere; `status`/`statusMessage` are
+additive and omitted from `export()` until you actually set them.
+
 ## outputSchema (JSON Schema draft-07)
 
 `EventPayloadVariable` and `ActionOutput` accept an optional JSON Schema via `setOutputSchema()`. The flow editor uses it to expand object keys. The SDK validates values **before** they leave the client.
