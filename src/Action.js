@@ -4,6 +4,7 @@ import MutableResource from "./MutableResource.js";
 import { requireResourceId, parseResourceCtorArg } from "./resourceId.js";
 import { normalizeOptionalColor } from "./color.js";
 import { validateActionResult } from "./outputSchemaValidate.js";
+import { assertValidDefaultLocale, assertValidTranslation, assertWithinLimits } from "./i18n.js";
 
 /**
  * @typedef {object} ActionExecContext
@@ -45,6 +46,9 @@ export default class Action extends MutableResource {
   #parameters = [];
   #outputs = [];
   #exec;
+  #defaultLocale;
+  /** @type {Record<string, object>} */
+  #i18n = {};
   /** @type {Map<ActionParameter, () => void>} */
   #parameterUnsubs = new Map();
   /** @type {Map<ActionOutput, () => void>} */
@@ -116,6 +120,72 @@ export default class Action extends MutableResource {
     this.#color = normalizeOptionalColor(color);
     this._notifyChange(opts);
     return this;
+  }
+
+  /**
+   * Locale that name/description/parameter/output/enum base text is written
+   * in. Purely documentary (used by the editor's fallback chain); defaults
+   * to "en" server-side when omitted.
+   * @param {string} locale
+   * @param {object} [opts]
+   */
+  setDefaultLocale(locale, opts) {
+    assertValidDefaultLocale(locale, `Action "${this.#id}"`);
+    this.#defaultLocale = locale;
+    this._notifyChange(opts);
+    return this;
+  }
+
+  #allowedIds() {
+    return {
+      parameterIds: new Set(this.#parameters.map((p) => p.id)),
+      outputIds: new Set(this.#outputs.map((o) => o.id)),
+      enumParameterIds: new Set(this.#parameters.filter((p) => p.type === "enum").map((p) => p.id)),
+    };
+  }
+
+  /**
+   * Replace the whole i18n annex with `translations` (keyed by locale).
+   * Validates that every referenced parameter/output/enum id actually
+   * exists on this action.
+   * @param {Record<string, { name?: string, description?: string, parameters?: object, outputs?: object, enumValues?: object }>} translations
+   * @param {object} [opts]
+   */
+  setTranslations(translations, opts) {
+    if (!translations || typeof translations !== "object" || Array.isArray(translations)) {
+      throw new Error(`Action "${this.#id}": translations must be an object keyed by locale`);
+    }
+    const ids = this.#allowedIds();
+    const next = {};
+    for (const [locale, translation] of Object.entries(translations)) {
+      next[locale] = assertValidTranslation(locale, translation, {
+        ...ids,
+        allowedGroups: ["name", "description", "parameters", "outputs", "enumValues"],
+        label: `Action "${this.#id}"`,
+      });
+    }
+    assertWithinLimits(next, `Action "${this.#id}"`);
+    this.#i18n = next;
+    this._notifyChange(opts);
+    return this;
+  }
+
+  /**
+   * Add/replace a single locale's translation without touching the others.
+   * @param {string} locale
+   * @param {object} translation
+   * @param {object} [opts]
+   */
+  addTranslation(locale, translation, opts) {
+    return this.setTranslations({ ...this.#i18n, [locale]: translation }, opts);
+  }
+
+  get defaultLocale() {
+    return this.#defaultLocale;
+  }
+
+  get i18n() {
+    return this.#i18n;
   }
 
   addParameter(parameter, opts) {
@@ -265,6 +335,8 @@ export default class Action extends MutableResource {
     if (this.#color !== undefined) obj.color = this.#color;
     if (this.#parameters.length > 0) obj.parameters = this.#parameters.map((p) => p.export());
     if (this.#outputs.length > 0) obj.outputs = this.#outputs.map((o) => o.export());
+    if (this.#defaultLocale !== undefined) obj.defaultLocale = this.#defaultLocale;
+    if (Object.keys(this.#i18n).length > 0) obj.i18n = this.#i18n;
 
     return obj;
   }

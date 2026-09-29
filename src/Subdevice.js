@@ -3,6 +3,7 @@ import Action from "./Action.js";
 import Event from "./Event.js";
 import MutableResource from "./MutableResource.js";
 import { normalizeOptionalColor } from "./color.js";
+import { assertValidDefaultLocale, assertValidTranslation, assertWithinLimits } from "./i18n.js";
 
 const EXTERNAL_ID_RE = /^[a-zA-Z0-9._-]{1,128}$/;
 
@@ -17,6 +18,9 @@ export default class Subdevice extends MutableResource {
   #unauthorizedMessage = null;
   #degraded = false;
   #degradedMessage = null;
+  #defaultLocale;
+  /** @type {Record<string, object>} */
+  #i18n = {};
   /** @type {Map<string, Action>} */
   #actions = new Map();
   /** @type {Map<string, Event>} */
@@ -190,6 +194,60 @@ export default class Subdevice extends MutableResource {
     return this;
   }
 
+  /**
+   * Locale that name/description base text is written in. Purely
+   * documentary; defaults to "en" server-side when omitted.
+   * @param {string} locale
+   * @param {object} [opts]
+   */
+  setDefaultLocale(locale, opts) {
+    assertValidDefaultLocale(locale, `Subdevice "${this.externalId}"`);
+    this.#defaultLocale = locale;
+    this._notifyChange(opts);
+    return this;
+  }
+
+  /**
+   * Replace the whole i18n annex (translations of this subdevice's own
+   * name/description — its actions/events carry their own annex).
+   * @param {Record<string, { name?: string, description?: string }>} translations
+   * @param {object} [opts]
+   */
+  setTranslations(translations, opts) {
+    if (!translations || typeof translations !== "object" || Array.isArray(translations)) {
+      throw new Error(`Subdevice "${this.externalId}": translations must be an object keyed by locale`);
+    }
+    const next = {};
+    for (const [locale, translation] of Object.entries(translations)) {
+      next[locale] = assertValidTranslation(locale, translation, {
+        allowedGroups: ["name", "description"],
+        label: `Subdevice "${this.externalId}"`,
+      });
+    }
+    assertWithinLimits(next, `Subdevice "${this.externalId}"`);
+    this.#i18n = next;
+    this._notifyChange(opts);
+    return this;
+  }
+
+  /**
+   * Add/replace a single locale's translation without touching the others.
+   * @param {string} locale
+   * @param {{ name?: string, description?: string }} translation
+   * @param {object} [opts]
+   */
+  addTranslation(locale, translation, opts) {
+    return this.setTranslations({ ...this.#i18n, [locale]: translation }, opts);
+  }
+
+  get defaultLocale() {
+    return this.#defaultLocale;
+  }
+
+  get i18n() {
+    return this.#i18n;
+  }
+
   setConnected(connected, opts) {
     this.#connected = !!connected;
     this._notifyChange(opts);
@@ -202,7 +260,10 @@ export default class Subdevice extends MutableResource {
    * disconnected regardless of this flag. If both unauthorized and degraded
    * are set, unauthorized wins.
    * @param {boolean} value
-   * @param {{ message?: string, sync?: boolean }} [opts]
+   * @param {{ message?: string | Record<string, string>, sync?: boolean }} [opts]
+   *   `message` may be a plain string or a `{ locale: string }` map (e.g.
+   *   `{ en: "Token expired", es: "Token caducado" }`) for a translated
+   *   statusMessage; see docs-drafts/i18n-catalogs.md.
    */
   setUnauthorized(value, opts = {}) {
     this.#unauthorized = !!value;
@@ -215,7 +276,8 @@ export default class Subdevice extends MutableResource {
    * Live-set the "degraded" status (e.g. rate limited, partial functionality).
    * Only meaningful while `connected` is true and while not unauthorized.
    * @param {boolean} value
-   * @param {{ message?: string, sync?: boolean }} [opts]
+   * @param {{ message?: string | Record<string, string>, sync?: boolean }} [opts]
+   *   `message` may be a plain string or a `{ locale: string }` map.
    */
   setDegraded(value, opts = {}) {
     this.#degraded = !!value;
@@ -358,6 +420,8 @@ export default class Subdevice extends MutableResource {
       ...(this.#deviceType && { deviceType: this.#deviceType }),
       ...(this.#color !== undefined && { color: this.#color }),
       ...(this.#metadata !== undefined && { metadata: this.#metadata }),
+      ...(this.#defaultLocale !== undefined && { defaultLocale: this.#defaultLocale }),
+      ...(Object.keys(this.#i18n).length > 0 && { i18n: this.#i18n }),
       actions: this.getActionsArray().map((a) => a.export()),
       events: this.getEventsArray().map((e) => e.export()),
     };
