@@ -16,6 +16,15 @@ export { default as ResourceChangeNotifier } from "./ResourceChangeNotifier.js";
 export { buildSubdevicePublicId, SUBDEVICE_ID_SEP } from "./subdeviceId.js";
 export { ANNOTATION_DEFAULTS, ANNOTATION_KEYS, resolveAnnotations } from "./annotations.js";
 export {
+  VISIBLE_WHEN_OPERATORS,
+  VISIBLE_WHEN_VALUE_OPERATORS,
+  VISIBLE_WHEN_STRUCTURAL_OPERATORS,
+  assertValidVisibleWhenCondition,
+  collectVisibleWhenParamRefs,
+  assertValidVisibleWhenReferences,
+} from "./visibleWhen.js";
+export { ANNOTATION_DEFAULTS, ANNOTATION_KEYS, resolveAnnotations } from "./annotations.js";
+export {
   EXECUTE_ON,
   ON_UNAVAILABLE,
   isSpecialExecuteOn,
