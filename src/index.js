@@ -10,6 +10,7 @@ export { default as EventPayloadVariable } from "./EventPayloadVariable.js";
 export { default as EventParameter } from "./EventParameter.js";
 export { matchEventParameters, matchValuesFromPayload } from "./eventParameterMatch.js";
 export { default as Subdevice } from "./Subdevice.js";
+export { default as Collection } from "./Collection.js";
 export { default as MutableResource } from "./MutableResource.js";
 export { default as ResourceChangeNotifier } from "./ResourceChangeNotifier.js";
 export { buildSubdevicePublicId, SUBDEVICE_ID_SEP } from "./subdeviceId.js";
@@ -24,3 +25,10 @@ export {
   parseActionRef,
   resolveNodeExecTarget,
 } from "./execTarget.js";
+  VISIBLE_WHEN_OPERATORS,
+  VISIBLE_WHEN_VALUE_OPERATORS,
+  VISIBLE_WHEN_STRUCTURAL_OPERATORS,
+  assertValidVisibleWhenCondition,
+  collectVisibleWhenParamRefs,
+  assertValidVisibleWhenReferences,
+} from "./visibleWhen.js";
