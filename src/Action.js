@@ -45,6 +45,7 @@ export default class Action extends MutableResource {
   #name;
   #description;
   #color;
+  #hidden;
   #parameters = [];
   #outputs = [];
   #exec;
@@ -64,12 +65,13 @@ export default class Action extends MutableResource {
    */
   constructor(arg) {
     super();
-    const { id, name, description, parameters = [], outputs = [], exec, color, annotations } =
+    const { id, name, description, parameters = [], outputs = [], exec, color, hidden, annotations } =
       parseResourceCtorArg(arg);
     this.#id = requireResourceId(id, "Action");
     if (name) this.setName(name, { sync: false });
     if (description !== undefined) this.setDescription(description, { sync: false });
     if (color !== undefined) this.setColor(color, { sync: false });
+    if (hidden !== undefined) this.setHidden(hidden, { sync: false });
     if (annotations !== undefined) this.setAnnotations(annotations, { sync: false });
     if (exec) this.setExec(exec);
     for (const p of parameters) this.addParameter(p, { sync: false });
@@ -126,6 +128,25 @@ export default class Action extends MutableResource {
     this.#color = normalizeOptionalColor(color);
     this._notifyChange(opts);
     return this;
+  }
+
+  /**
+   * When true, the flow editor omits this action from the palette.
+   * Existing nodes and exec still work.
+   * @param {boolean} hidden
+   * @param {object} [opts]
+   */
+  setHidden(hidden, opts) {
+    if (typeof hidden !== "boolean") {
+      throw new Error("Action hidden must be a boolean");
+    }
+    this.#hidden = hidden;
+    this._notifyChange(opts);
+    return this;
+  }
+
+  get hidden() {
+    return this.#hidden;
   }
 
   /**
@@ -363,6 +384,7 @@ export default class Action extends MutableResource {
 
     if (this.#description !== undefined) obj.description = this.#description;
     if (this.#color !== undefined) obj.color = this.#color;
+    if (this.#hidden) obj.hidden = true;
     if (this.#annotations !== undefined) obj.annotations = { ...this.#annotations };
     if (this.#parameters.length > 0) {
       obj.parameters = this.#parameters.map((p) => p.export());
