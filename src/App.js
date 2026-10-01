@@ -17,6 +17,7 @@ export default class App extends ResourceHost {
   /** @type {string | undefined} */
   #defaultLocale;
   #appInternalId = null;
+  #heartbeatTimer = null;
   /** @type {Map<string, Map<string, import('./Action.js').default>>} */
   #subdeviceActions = new Map();
   #eventHandlers = {};
@@ -40,6 +41,7 @@ export default class App extends ResourceHost {
    *   automatically verifies every incoming request signature.
    * @param {boolean} [opts.isHub]  When true, declares this OAuth app as a Sclera hub on registerActions/registerSubdevices.
    * @param {string} [opts.color]
+   * @param {boolean} [opts.heartbeat]  When false, skip the periodic POST /oauth/heartbeat (default true).
    * @param {import('./Action.js').default[]} [opts.actions]
    * @param {import('./Event.js').default[]} [opts.events]
    * @param {import('./Subdevice.js').default[]} [opts.subdevices]
@@ -52,6 +54,7 @@ export default class App extends ResourceHost {
     webhookSigningSecret,
     isHub = false,
     color,
+    heartbeat = true,
     actions = [],
     events = [],
     subdevices = [],
@@ -70,6 +73,19 @@ export default class App extends ResourceHost {
     this.#ecdh = crypto.createECDH("prime256v1");
     this.#ecdh.generateKeys();
     this.#bindAllCatalogResources();
+    if (heartbeat !== false && this.#clientId && this.#clientSecret) {
+      this.#startHeartbeat();
+    }
+  }
+
+  /**
+   * Stop the periodic liveness heartbeat. Call this when shutting down the process.
+   */
+  close() {
+    if (this.#heartbeatTimer) {
+      clearInterval(this.#heartbeatTimer);
+      this.#heartbeatTimer = null;
+    }
   }
 
   addSubdevice(subdevice) {
@@ -321,6 +337,22 @@ export default class App extends ResourceHost {
       targetListenerIds,
       targetUserIds,
     });
+
+    const grants = Array.isArray(result?.pendingAuthGrants) ? result.pendingAuthGrants : [];
+    await Promise.all(
+      grants.map((g) =>
+        this.#sendAuthGrant(
+          g.listenerClientId,
+          g.listenerPubKey,
+          g.eventId,
+          g.subscriptionId,
+          g.emitterId ?? emitterId ?? null,
+        ).catch((err) =>
+          console.error("[sclera/app] Failed to send pending authGrant:", err.message),
+        ),
+      ),
+    );
+
     return result;
   }
 
@@ -617,6 +649,29 @@ export default class App extends ResourceHost {
       this.#emitEvent("events/incoming", { emitterId, eventId, payload });
     } catch (err) {
       console.error(`[sclera/app] Failed to decrypt event ${emitterId}:${eventId}:`, err.message);
+    }
+  }
+
+  #startHeartbeat() {
+    const beat = () => {
+      this.#sendHeartbeat().catch((err) =>
+        console.warn("[sclera/app] heartbeat failed:", err.message),
+      );
+    };
+    beat();
+    const delayMs = 30_000 + Math.floor(Math.random() * 5_000);
+    this.#heartbeatTimer = setInterval(beat, delayMs);
+    if (typeof this.#heartbeatTimer.unref === "function") this.#heartbeatTimer.unref();
+  }
+
+  async #sendHeartbeat() {
+    const response = await fetch(this.#rest("/oauth/heartbeat"), {
+      method: "POST",
+      headers: { Authorization: this.#basicAuth(), "Content-Type": "application/json" },
+      body: "{}",
+    });
+    if (!response.ok) {
+      throw new Error(`${response.status} ${await response.text()}`);
     }
   }
 
