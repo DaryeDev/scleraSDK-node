@@ -23,7 +23,6 @@ export {
   collectVisibleWhenParamRefs,
   assertValidVisibleWhenReferences,
 } from "./visibleWhen.js";
-export { ANNOTATION_DEFAULTS, ANNOTATION_KEYS, resolveAnnotations } from "./annotations.js";
 export {
   EXECUTE_ON,
   ON_UNAVAILABLE,
@@ -35,11 +34,3 @@ export {
   parseActionRef,
   resolveNodeExecTarget,
 } from "./execTarget.js";
-export {
-  VISIBLE_WHEN_OPERATORS,
-  VISIBLE_WHEN_VALUE_OPERATORS,
-  VISIBLE_WHEN_STRUCTURAL_OPERATORS,
-  assertValidVisibleWhenCondition,
-  collectVisibleWhenParamRefs,
-  assertValidVisibleWhenReferences,
-} from "./visibleWhen.js";
